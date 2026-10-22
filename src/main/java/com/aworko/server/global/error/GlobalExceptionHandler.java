@@ -5,6 +5,7 @@ import java.util.List;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -37,6 +38,13 @@ public class GlobalExceptionHandler {
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception e) {
         ErrorCode code = ErrorCode.VALIDATION_ERROR;
+        return respond(code, ErrorResponse.of(code, code.getDefaultMessage()));
+    }
+
+    /** @PreAuthorize 거부는 필터가 아니라 컨트롤러 단계에서 나므로 여기서 403으로 바꾼다. */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleAccessDenied(AccessDeniedException e) {
+        ErrorCode code = ErrorCode.FORBIDDEN;
         return respond(code, ErrorResponse.of(code, code.getDefaultMessage()));
     }
 

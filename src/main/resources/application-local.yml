@@ -1,4 +1,9 @@
-# 로컬 개발용. DB·RabbitMQ 연결 설정은 2·4단계에서 추가한다.
+# 로컬 개발용. RabbitMQ 연결 설정은 4단계에서 추가한다.
+app:
+  jwt:
+    # 로컬 전용 기본값. 운영(prod)에는 기본값이 없어서 JWT_SECRET이 없으면 기동하지 않는다.
+    secret: ${JWT_SECRET:local-dev-only-jwt-secret-change-me-32bytes+}
+
 logging:
   level:
     com.aworko.server: DEBUG

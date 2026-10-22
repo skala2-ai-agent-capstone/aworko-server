@@ -1,0 +1,424 @@
+{
+  "database": "axeval",
+  "engine": "PostgreSQL 16",
+  "updated_at": "2026-10-22",
+  "notes": [
+    "업무 DB 하나(axeval)에 MCP 소유 테이블과 백엔드 소유 테이블이 함께 있다.",
+    "owner=mcp: ai-agent-capstone/mcp_servers/db/postgres/001_schema.sql이 관리. owner=backend: aworko-server Flyway(flyway_backend_history)가 관리.",
+    "인증: 사번(employee_no) + 비밀번호(평문) → 백엔드가 JWT 발급, 클라이언트가 보관해 Authorization: Bearer로 전송. 서버 세션 저장 없음.",
+    "역할: users.role = member(팀원) 또는 team_lead(팀장, 검토자 겸임).",
+    "*_masked 칸은 마스킹을 하지 않아 원문과 같으므로 생략.",
+    "평가 제외 테이블(evidence_links, approval_requests, work_links, reused_sources)과 테스트·과거 데이터용 테이블(fault_injections, access_attempts, historical_works)은 포함하지 않음."
+  ],
+  "changes": [
+    "users: employee_no(int, UK)·password(평문) 추가, test_token·email·access_scope·status 삭제, role 값을 member/team_lead로 축소",
+    "삭제: user_credentials, user_sessions, login_events, roles, user_roles (JWT·단일 역할이라 불필요)",
+    "review_requests.reviewer_id: 담당 팀장(team_lead)으로 배정",
+    "live_evaluations: 실시간 피드백 요청 겸용. status에 대기·생성 중 추가(폴링으로 진행 상태 확인)",
+    "백엔드 테이블 추가: outbox_events, evaluation_failures, aggregation_approvals"
+  ],
+  "tables": [
+    {
+      "name": "companies",
+      "group": "조직·사용자",
+      "owner": "mcp",
+      "description": "회사(테넌트)",
+      "columns": [
+        {"name": "company_id", "type": "text", "pk": true},
+        {"name": "name", "type": "text", "nullable": false},
+        {"name": "min_aggregation_size", "type": "int", "nullable": false, "default": 5, "note": "팀 집계 최소 인원"}
+      ]
+    },
+    {
+      "name": "teams",
+      "group": "조직·사용자",
+      "owner": "mcp",
+      "description": "팀",
+      "columns": [
+        {"name": "team_id", "type": "text", "pk": true},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "name", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "name": "users",
+      "group": "조직·사용자",
+      "owner": "mcp",
+      "description": "사용자·로그인 계정",
+      "columns": [
+        {"name": "user_id", "type": "text", "pk": true, "note": "내부 식별자, 다른 테이블 FK가 참조"},
+        {"name": "employee_no", "type": "int", "nullable": false, "unique": true, "note": "사번, 로그인 ID"},
+        {"name": "password", "type": "text", "nullable": false, "note": "평문(단순 프로젝트용). API 응답·로그에 내보내지 않음"},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "team_id", "type": "text", "nullable": true, "fk": "teams.team_id"},
+        {"name": "name", "type": "text", "nullable": false},
+        {"name": "role", "type": "text", "nullable": false, "check": ["member", "team_lead"], "note": "team_lead는 검토자 겸임"}
+      ]
+    },
+    {
+      "name": "customers",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "고객사",
+      "columns": [
+        {"name": "customer_id", "type": "text", "pk": true},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "name", "type": "text", "nullable": false},
+        {"name": "approved_reference", "type": "boolean", "nullable": false, "default": false}
+      ]
+    },
+    {
+      "name": "work_cases",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "업무 건",
+      "columns": [
+        {"name": "work_id", "type": "text", "pk": true},
+        {"name": "case_id", "type": "text", "unique": true, "note": "테스트 시나리오 ID"},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "team_id", "type": "text", "fk": "teams.team_id"},
+        {"name": "employee_id", "type": "text", "nullable": false, "fk": "users.user_id"},
+        {"name": "customer_id", "type": "text", "nullable": false, "fk": "customers.customer_id"},
+        {"name": "title", "type": "text", "note": "신규"},
+        {"name": "work_type", "type": "text", "nullable": true, "check": ["rfp_analysis", "proposal", "quote", "inquiry_reply"], "note": "평가 때 채움"},
+        {"name": "status", "type": "text", "nullable": false},
+        {"name": "created_at", "type": "timestamptz", "nullable": false},
+        {"name": "completed_at", "type": "timestamptz"},
+        {"name": "rfp_status", "type": "text"},
+        {"name": "registration", "type": "jsonb", "note": "업무 정보. NULL = 등록 기록 없음"},
+        {"name": "scenario_summary", "type": "text"}
+      ]
+    },
+    {
+      "name": "source_messages",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "고객 요청·질문 원문",
+      "columns": [
+        {"name": "work_id", "type": "text", "pk": true, "fk": "work_cases.work_id"},
+        {"name": "channel", "type": "text"},
+        {"name": "received_at", "type": "timestamptz"},
+        {"name": "content", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "name": "source_documents",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "고객 제출 첨부(RFP·정정 공고·메모)",
+      "columns": [
+        {"name": "attachment_id", "type": "text", "pk": true},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "doc_id", "type": "text", "nullable": false},
+        {"name": "doc_type", "type": "text", "nullable": false, "check": ["rfp", "rfp_correction", "meeting_note", "call_note"]},
+        {"name": "version", "type": "text", "nullable": false},
+        {"name": "grade", "type": "text"},
+        {"name": "uploaded_by", "type": "text", "fk": "users.user_id"},
+        {"name": "uploaded_at", "type": "timestamptz", "nullable": false},
+        {"name": "content", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "name": "attached_references",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "업무에 지정한 사내 자료",
+      "columns": [
+        {"name": "work_id", "type": "text", "pk": true, "fk": "work_cases.work_id"},
+        {"name": "doc_id", "type": "text", "pk": true, "note": "documents.doc_id 값(FK 아님)"},
+        {"name": "version", "type": "text", "pk": true, "note": "documents.version 값(FK 아님)"},
+        {"name": "seq", "type": "int", "nullable": false}
+      ]
+    },
+    {
+      "name": "llm_exchanges",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "LLM 호출 기록(기록 프록시가 저장). 채팅 대화의 원본",
+      "columns": [
+        {"name": "id", "type": "bigint", "pk": true},
+        {"name": "created_at", "type": "timestamptz", "nullable": false},
+        {"name": "member", "type": "text", "note": "프록시 키 이름"},
+        {"name": "endpoint", "type": "text"},
+        {"name": "stage", "type": "text", "check": ["workspace_chat", "classify", "rubric", "evaluate", "live_evaluate"]},
+        {"name": "work_id", "type": "text", "fk": "work_cases.work_id", "note": "X-Work-Id"},
+        {"name": "user_id", "type": "text", "fk": "users.user_id", "note": "X-User-Id"},
+        {"name": "model", "type": "text"},
+        {"name": "stream", "type": "boolean"},
+        {"name": "status_code", "type": "int"},
+        {"name": "error", "type": "text"},
+        {"name": "latency_ms", "type": "int"},
+        {"name": "input_tokens", "type": "int"},
+        {"name": "output_tokens", "type": "int"},
+        {"name": "request", "type": "jsonb", "note": "대화 이력 포함"},
+        {"name": "response", "type": "jsonb"},
+        {"name": "response_text", "type": "text", "note": "스트리밍 원문"}
+      ]
+    },
+    {
+      "name": "artifact_versions",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "산출물 버전",
+      "columns": [
+        {"name": "artifact_id", "type": "text", "pk": true},
+        {"name": "version", "type": "text", "pk": true},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "author", "type": "text", "nullable": false, "check": ["ai_draft", "employee"]},
+        {"name": "saved_at", "type": "timestamptz", "nullable": false},
+        {"name": "content", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "name": "artifact_spans",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "산출물 인용 단위",
+      "columns": [
+        {"name": "span_id", "type": "text", "pk": true, "note": "{artifact_id}:{version}:{key}"},
+        {"name": "artifact_id", "type": "text", "nullable": false, "fk": "artifact_versions.artifact_id"},
+        {"name": "version", "type": "text", "nullable": false, "fk": "artifact_versions.version"},
+        {"name": "seq", "type": "int", "nullable": false},
+        {"name": "span_key", "type": "text", "nullable": false},
+        {"name": "text", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "name": "reference_access_logs",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "사내 자료 열람 기록",
+      "columns": [
+        {"name": "work_id", "type": "text", "pk": true, "fk": "work_cases.work_id"},
+        {"name": "seq", "type": "int", "pk": true},
+        {"name": "user_id", "type": "text", "nullable": false, "fk": "users.user_id"},
+        {"name": "doc_id", "type": "text", "nullable": false},
+        {"name": "version", "type": "text", "nullable": false},
+        {"name": "accessed_at", "type": "timestamptz", "nullable": false}
+      ]
+    },
+    {
+      "name": "work_events",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "업무 이벤트(work.completed 등)",
+      "columns": [
+        {"name": "event_id", "type": "text", "pk": true},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "event_type", "type": "text", "nullable": false},
+        {"name": "artifact_version", "type": "text"},
+        {"name": "rubric_version", "type": "text"},
+        {"name": "idempotency_key", "type": "text"},
+        {"name": "occurred_at", "type": "timestamptz", "nullable": false},
+        {"name": "payload", "type": "jsonb", "nullable": false, "default": "{}"}
+      ]
+    },
+    {
+      "name": "live_evaluations",
+      "group": "업무 공간",
+      "owner": "mcp",
+      "description": "중간 점검·실시간 피드백. 백엔드가 요청 행(대기)을 만들고 큐에 발행, Agent가 MCP로 결과 저장",
+      "columns": [
+        {"name": "live_eval_id", "type": "text", "pk": true, "note": "신규 테이블. 큐 메시지 중복 방지 키"},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "requested_by", "type": "text", "nullable": false, "fk": "users.user_id"},
+        {"name": "requested_at", "type": "timestamptz", "nullable": false, "note": "사용자별 5분 1회 제한 판단에 사용"},
+        {"name": "from_seq", "type": "int", "nullable": false, "note": "messages.seq 범위 시작(최근 5개)"},
+        {"name": "to_seq", "type": "int", "nullable": false, "note": "messages.seq 범위 끝"},
+        {"name": "rubric_doc_id", "type": "text"},
+        {"name": "rubric_version", "type": "text"},
+        {"name": "status", "type": "text", "nullable": false, "check": ["대기", "생성 중", "완료", "실패"], "note": "대기·생성 중 추가(폴링용)"},
+        {"name": "items", "type": "jsonb"},
+        {"name": "coaching", "type": "jsonb"},
+        {"name": "model", "type": "text"},
+        {"name": "latency_ms", "type": "int"},
+        {"name": "error", "type": "text"}
+      ]
+    },
+    {
+      "name": "evaluations",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "최종 평가 건",
+      "columns": [
+        {"name": "evaluation_id", "type": "text", "pk": true, "note": "EVAL-{work_id에서 W- 제외}-{artifact_version}"},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "artifact_id", "type": "text", "nullable": false},
+        {"name": "artifact_version", "type": "text", "nullable": false},
+        {"name": "rubric_version", "type": "text", "nullable": false, "note": "documents.version 값"},
+        {"name": "status", "type": "text", "nullable": false, "default": "대기", "check": ["대기", "수집 중", "평가 중", "근거 확인 중", "코칭 생성 중", "확인 대기", "검토 대기", "확정", "처리 실패", "자료 보류"]},
+        {"name": "source_key", "type": "text", "unique": true, "note": "완료 이벤트 중복 방지 키"},
+        {"name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "updated_at", "type": "timestamptz", "nullable": false, "default": "now()"}
+      ]
+    },
+    {
+      "name": "evaluation_drafts",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "채점 초안(Agent가 MCP로 저장)",
+      "columns": [
+        {"name": "evaluation_id", "type": "text", "pk": true, "fk": "evaluations.evaluation_id"},
+        {"name": "revision", "type": "int", "pk": true},
+        {"name": "items", "type": "jsonb", "nullable": false, "note": "[{item_id, item, status(채점|미관측|검토 필요), score, reason, evidence_ids[]}]"},
+        {"name": "saved_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "run_id", "type": "text"}
+      ]
+    },
+    {
+      "name": "evaluation_coaching",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "코칭(Agent가 MCP로 저장)",
+      "columns": [
+        {"name": "evaluation_id", "type": "text", "pk": true, "fk": "evaluations.evaluation_id"},
+        {"name": "revision", "type": "int", "pk": true},
+        {"name": "items", "type": "jsonb", "nullable": false, "note": "[{item_id, kind(강점|보완점|기록 안내), target_span_id, text}]"},
+        {"name": "saved_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "run_id", "type": "text"}
+      ]
+    },
+    {
+      "name": "review_requests",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "검토 요청(이의 제기·검토 필요 항목)",
+      "columns": [
+        {"name": "review_request_id", "type": "text", "pk": true},
+        {"name": "evaluation_id", "type": "text", "nullable": false, "fk": "evaluations.evaluation_id"},
+        {"name": "target_items", "type": "jsonb", "nullable": false},
+        {"name": "reason", "type": "text", "nullable": false},
+        {"name": "review_memo", "type": "jsonb", "nullable": false},
+        {"name": "reviewer_id", "type": "text", "fk": "users.user_id", "note": "업무 담당자 팀의 team_lead"},
+        {"name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "run_id", "type": "text"}
+      ]
+    },
+    {
+      "name": "human_actions",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "사람의 행동 기록. 백엔드가 기록하고 business-mcp가 읽음",
+      "columns": [
+        {"name": "action_id", "type": "text", "pk": true},
+        {"name": "work_id", "type": "text", "nullable": false, "fk": "work_cases.work_id"},
+        {"name": "user_id", "type": "text", "nullable": false, "fk": "users.user_id"},
+        {"name": "action", "type": "text", "nullable": false, "note": "confirm, appeal, review_decision, approve_aggregation, retry_failed_evaluation"},
+        {"name": "at", "type": "timestamptz", "nullable": false},
+        {"name": "artifact_version", "type": "text"},
+        {"name": "payload", "type": "jsonb", "nullable": false, "default": "{}", "note": "evaluation_id, target_items, cited_evidence, comment, decision, reason"}
+      ]
+    },
+    {
+      "name": "documents",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "사내 문서(루브릭·정책·참고 자료·코칭 사례)",
+      "columns": [
+        {"name": "doc_id", "type": "text", "pk": true},
+        {"name": "version", "type": "text", "pk": true},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "title", "type": "text", "nullable": false},
+        {"name": "grade", "type": "text", "nullable": false, "note": "사내·대외비·기밀"},
+        {"name": "collection", "type": "text", "check": ["references", "policies", "rubrics", "coaching_examples"]},
+        {"name": "indexed", "type": "boolean", "nullable": false, "note": "false = 기밀, 색인 금지"},
+        {"name": "status", "type": "text", "nullable": false, "check": ["현행", "폐기", "초안"]},
+        {"name": "effective_from", "type": "date"},
+        {"name": "content", "type": "text"},
+        {"name": "work_type", "type": "text"},
+        {"name": "item", "type": "text"},
+        {"name": "score_level", "type": "int"},
+        {"name": "source_file", "type": "text"},
+        {"name": "note", "type": "text"}
+      ]
+    },
+    {
+      "name": "rubric_items",
+      "group": "평가·기준",
+      "owner": "mcp",
+      "description": "루브릭 기준 항목",
+      "columns": [
+        {"name": "doc_id", "type": "text", "pk": true, "fk": "documents.doc_id"},
+        {"name": "version", "type": "text", "pk": true, "fk": "documents.version"},
+        {"name": "item_id", "type": "text", "pk": true},
+        {"name": "seq", "type": "int", "nullable": false},
+        {"name": "item", "type": "text", "nullable": false},
+        {"name": "criterion", "type": "text", "nullable": false},
+        {"name": "score_2", "type": "text", "nullable": false},
+        {"name": "score_1", "type": "text"},
+        {"name": "score_0", "type": "text", "nullable": false},
+        {"name": "unobserved", "type": "text"},
+        {"name": "needs_review", "type": "text"},
+        {"name": "evidence_sources", "type": "text[]", "nullable": false},
+        {"name": "related_clauses", "type": "text[]", "nullable": false}
+      ]
+    },
+    {
+      "name": "outbox_events",
+      "group": "백엔드",
+      "owner": "backend",
+      "description": "평가·피드백 메시지 발행 대기열(transactional outbox)",
+      "columns": [
+        {"name": "id", "type": "bigserial", "pk": true},
+        {"name": "aggregate_id", "type": "text", "nullable": false, "note": "evaluation_id 또는 live_eval_id"},
+        {"name": "type", "type": "text", "nullable": false, "check": ["EVALUATE", "RESUME"], "note": "실시간 피드백 구현 시 LIVE_EVALUATE 추가 예정"},
+        {"name": "routing_key", "type": "text", "nullable": false},
+        {"name": "payload", "type": "jsonb", "nullable": false, "note": "식별자·버전만, 원문 금지"},
+        {"name": "status", "type": "text", "nullable": false, "default": "PENDING", "check": ["PENDING", "SENT"]},
+        {"name": "attempts", "type": "int", "nullable": false, "default": 0},
+        {"name": "last_error", "type": "text"},
+        {"name": "created_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "sent_at", "type": "timestamptz"}
+      ]
+    },
+    {
+      "name": "evaluation_failures",
+      "group": "백엔드",
+      "owner": "backend",
+      "description": "DLQ로 간 메시지 보존",
+      "columns": [
+        {"name": "id", "type": "bigserial", "pk": true},
+        {"name": "evaluation_id", "type": "text", "nullable": false, "fk": "evaluations.evaluation_id"},
+        {"name": "message", "type": "jsonb", "nullable": false},
+        {"name": "reason", "type": "text"},
+        {"name": "failed_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "reprocessed_at", "type": "timestamptz"},
+        {"name": "reprocessed_by", "type": "text", "fk": "users.user_id"}
+      ]
+    },
+    {
+      "name": "aggregation_approvals",
+      "group": "백엔드",
+      "owner": "backend",
+      "description": "팀장의 팀 집계 승인(업무 유형·기간별)",
+      "columns": [
+        {"name": "id", "type": "bigserial", "pk": true},
+        {"name": "company_id", "type": "text", "nullable": false, "fk": "companies.company_id"},
+        {"name": "team_id", "type": "text", "nullable": false, "fk": "teams.team_id"},
+        {"name": "work_type", "type": "text", "nullable": false, "check": ["rfp_analysis", "proposal", "quote", "inquiry_reply"]},
+        {"name": "period_from", "type": "date", "nullable": false},
+        {"name": "period_to", "type": "date", "nullable": false},
+        {"name": "approved_by", "type": "text", "nullable": false, "fk": "users.user_id"},
+        {"name": "approved_at", "type": "timestamptz", "nullable": false, "default": "now()"},
+        {"name": "snapshot", "type": "jsonb", "nullable": false, "note": "승인 시점 집계 결과"}
+      ]
+    }
+  ],
+  "views": [
+    {
+      "name": "messages",
+      "owner": "mcp",
+      "description": "llm_exchanges(stage=workspace_chat)를 대화 메시지로 펼친 뷰",
+      "columns": [
+        {"name": "message_id", "type": "text", "note": "work_id-M순번"},
+        {"name": "work_id", "type": "text"},
+        {"name": "seq", "type": "int"},
+        {"name": "role", "type": "text", "check": ["user", "assistant"]},
+        {"name": "content", "type": "text"},
+        {"name": "created_at", "type": "timestamptz"},
+        {"name": "exchange_id", "type": "bigint", "note": "원본 llm_exchanges.id"}
+      ]
+    }
+  ]
+}

@@ -4,14 +4,17 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.aworko.server.support.TestcontainersConfiguration;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@Import(TestcontainersConfiguration.class)
 class AworkoServerApplicationTests {
 
     @Autowired
@@ -32,10 +35,10 @@ class AworkoServerApplicationTests {
     }
 
     @Test
-    void unknownPathReturnsCommonErrorEnvelope() throws Exception {
+    void protectedPathWithoutTokenReturnsCommonErrorEnvelope() throws Exception {
         mockMvc.perform(get("/api/does-not-exist"))
-                .andExpect(status().isNotFound())
+                .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.ok").value(false))
-                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
+                .andExpect(jsonPath("$.error.code").value("UNAUTHORIZED"));
     }
 }
