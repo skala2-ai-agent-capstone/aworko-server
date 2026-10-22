@@ -4,6 +4,10 @@ import com.aworko.server.global.error.BusinessException;
 import com.aworko.server.global.error.ErrorCode;
 import com.aworko.server.global.security.AuthPrincipal;
 import com.aworko.server.global.security.JwtProvider;
+import com.aworko.server.organization.Company;
+import com.aworko.server.organization.CompanyRepository;
+import com.aworko.server.organization.Team;
+import com.aworko.server.organization.TeamRepository;
 import com.aworko.server.organization.User;
 import com.aworko.server.organization.UserRepository;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +24,8 @@ public class AuthService {
     private static final String BAD_CREDENTIALS = "사번 또는 비밀번호가 올바르지 않습니다";
 
     private final UserRepository userRepository;
+    private final CompanyRepository companyRepository;
+    private final TeamRepository teamRepository;
     private final JwtProvider jwtProvider;
 
     /**
@@ -32,13 +38,19 @@ public class AuthService {
 
         var principal = new AuthPrincipal(user.getUserId(), user.getCompanyId(), user.getTeamId(), user.getRole());
         JwtProvider.IssuedToken token = jwtProvider.issue(principal);
-        return LoginResponse.bearer(token.accessToken(), token.expiresInSeconds(), MeResponse.from(user));
+        return LoginResponse.bearer(token.accessToken(), token.expiresInSeconds(), toMe(user));
     }
 
     public MeResponse me(AuthPrincipal principal) {
         return userRepository.findByUserIdAndCompanyId(principal.userId(), principal.companyId())
-                .map(MeResponse::from)
+                .map(this::toMe)
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED));
+    }
+
+    private MeResponse toMe(User user) {
+        Company company = companyRepository.findById(user.getCompanyId()).orElse(null);
+        Team team = user.getTeamId() == null ? null : teamRepository.findById(user.getTeamId()).orElse(null);
+        return MeResponse.of(user, company, team);
     }
 
     private static boolean matches(String stored, String given) {

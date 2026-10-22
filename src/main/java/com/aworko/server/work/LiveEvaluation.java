@@ -68,6 +68,19 @@ public class LiveEvaluation {
     @Column
     private String error;
 
+    /**
+     * DLQ로 간 실시간 피드백 요청을 실패로 표시한다. 이미 완료·실패면 그대로 둔다.
+     * @return 상태를 바꿨으면 true
+     */
+    public boolean markFailed(String reason) {
+        if (status.isFinished()) {
+            return false;
+        }
+        status = LiveEvaluationStatus.FAILED;
+        error = reason;
+        return true;
+    }
+
     public static LiveEvaluation request(String workId, String requestedBy, int fromSeq, int toSeq,
                                          String rubricDocId, String rubricVersion, OffsetDateTime now) {
         LiveEvaluation e = new LiveEvaluation();

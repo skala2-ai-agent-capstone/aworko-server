@@ -29,6 +29,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-security")
+    implementation("org.springframework.boot:spring-boot-starter-amqp")
     implementation("io.jsonwebtoken:jjwt-api:0.12.7")
     runtimeOnly("io.jsonwebtoken:jjwt-impl:0.12.7")
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.7")
@@ -45,6 +46,8 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-testcontainers")
     testImplementation("org.testcontainers:junit-jupiter")
     testImplementation("org.testcontainers:postgresql")
+    testImplementation("org.testcontainers:rabbitmq")
+    testImplementation("org.awaitility:awaitility")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

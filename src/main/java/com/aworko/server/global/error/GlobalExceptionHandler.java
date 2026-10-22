@@ -17,6 +17,13 @@ import org.springframework.web.servlet.resource.NoResourceFoundException;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(RateLimitException.class)
+    public ResponseEntity<ApiResponse<Void>> handleRateLimit(RateLimitException e) {
+        return ResponseEntity.status(e.getErrorCode().getStatus())
+                .header("Retry-After", String.valueOf(e.getRetryAfterSeconds()))
+                .body(ApiResponse.failure(ErrorResponse.tooManyRequests(e.getMessage(), e.getRetryAfterSeconds())));
+    }
+
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResponse<Void>> handleBusiness(BusinessException e) {
         return respond(e.getErrorCode(), ErrorResponse.of(e.getErrorCode(), e.getMessage()));

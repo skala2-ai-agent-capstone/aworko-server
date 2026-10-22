@@ -4,6 +4,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.containers.RabbitMQContainer;
 
 /**
  * 운영과 같은 순서를 재현한다: MCP 쪽 001_schema.sql이 먼저 적용된 DB 위에서 Flyway(V1)와 JPA validate가 돈다.
@@ -21,5 +22,11 @@ public class TestcontainersConfiguration {
                 .withUsername("axeval")
                 .withPassword("axeval")
                 .withInitScript("db/001_schema.sql");
+    }
+
+    @Bean
+    @ServiceConnection
+    RabbitMQContainer rabbitmq() {
+        return new RabbitMQContainer("rabbitmq:4.1-management");
     }
 }

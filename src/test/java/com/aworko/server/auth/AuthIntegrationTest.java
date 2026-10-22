@@ -47,6 +47,9 @@ class AuthIntegrationTest {
                 .andExpect(jsonPath("$.data.employee_no").value(1021))
                 .andExpect(jsonPath("$.data.company_id").value("C-LGCNS-SALES"))
                 .andExpect(jsonPath("$.data.team_id").value("T-SALES-01"))
+                .andExpect(jsonPath("$.data.team_name").value("영업1팀"))
+                .andExpect(jsonPath("$.data.company_name").value("테스트 회사"))
+                .andExpect(jsonPath("$.data.avatar_initial").value("가"))
                 .andExpect(jsonPath("$.data.role").value("member"));
     }
 
@@ -61,10 +64,12 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void legacySeedRoleIsReadAsMember() throws Exception {
+    void legacySeedRoleIsReadAsMemberAndUserWithoutTeamHasNoTeamName() throws Exception {
         mockMvc.perform(loginRequest(4001, "1234"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.user.role").value("member"));
+                .andExpect(jsonPath("$.data.user.role").value("member"))
+                .andExpect(jsonPath("$.data.user.company_name").value("테스트 회사"))
+                .andExpect(jsonPath("$.data.user.team_name").doesNotExist());
     }
 
     @Test

@@ -4,7 +4,10 @@ import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import com.aworko.server.global.error.BusinessException;
+import com.aworko.server.global.error.ErrorCode;
 import java.time.OffsetDateTime;
+import java.util.Set;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -66,6 +69,32 @@ public class Evaluation {
         e.createdAt = now;
         e.updatedAt = now;
         return e;
+    }
+
+    /**
+     * 서버 전용 상태 전이. 현재 상태가 from에 없으면 409(이미 처리됐거나 아직 처리할 수 없는 상태).
+     * 호출 전에 행을 잠가(findByIdForUpdate) Agent의 진행 상태 갱신과 겹치지 않게 한다.
+     */
+    public void transition(Set<EvaluationStatus> from, EvaluationStatus to) {
+        if (!from.contains(status)) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "현재 상태(" + status.getCode() + ")에서는 처리할 수 없습니다");
+        }
+        status = to;
+        updatedAt = OffsetDateTime.now();
+    }
+
+    /**
+     * DLQ로 간 평가를 처리 실패로 표시한다. 이미 확정된 건은 바꾸지 않는다.
+     * @return 상태를 바꿨으면 true
+     */
+    public boolean markFailed() {
+        if (status == EvaluationStatus.CONFIRMED || status == EvaluationStatus.FAILED) {
+            return false;
+        }
+        status = EvaluationStatus.FAILED;
+        updatedAt = OffsetDateTime.now();
+        return true;
     }
 
     /** 평가 건 ID 규칙. business-mcp common/runtime.py eval_id_for와 같다. */

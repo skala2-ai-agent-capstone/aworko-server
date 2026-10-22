@@ -24,6 +24,17 @@ spring:
       hibernate:
         jdbc:
           time_zone: Asia/Seoul
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    # 아웃박스 릴레이가 브로커 수신 확인(confirm)을 받은 뒤에만 SENT로 표시한다
+    publisher-confirm-type: simple
+    listener:
+      simple:
+        # 처리 중 예외가 난 DLQ 메시지를 무한 재전달하지 않는다
+        default-requeue-rejected: false
   flyway:
     # 백엔드 전용 테이블만 관리. 기존 스키마 위에 baseline을 잡고 별도 이력 테이블을 쓴다.
     table: flyway_backend_history
@@ -50,6 +61,18 @@ app:
     secret: ${JWT_SECRET:}
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:8h}
     issuer: aworko-server
+  live-evaluation:
+    # 실시간 피드백 요청 간격(사용자별)
+    min-interval: 5m
+  messaging:
+    outbox:
+      enabled: ${OUTBOX_RELAY_ENABLED:true}
+      poll-interval: 1s
+      batch-size: 50
+      confirm-timeout: 5s
+    # 재시도 큐에서 머무는 시간. 지나면 요청 큐로 돌아간다 (큐 인자라 바꾸면 큐를 다시 만들어야 한다)
+    evaluation-retry-delay: 30s
+    live-evaluation-retry-delay: 5s
 
 springdoc:
   api-docs:

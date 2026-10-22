@@ -1,0 +1,24 @@
+name: aworko-server
+
+# 로컬 개발용 RabbitMQ. PostgreSQL은 ai-agent-capstone/mcp_servers의 compose(호스트 5433)를 쓴다.
+# 백엔드 컨테이너·배포 구성은 9단계(Dockerfile·compose)에서 추가한다.
+services:
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+    ports:
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # 관리 UI (로컬 전용)
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  rabbitmq-data:
