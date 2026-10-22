@@ -1,0 +1,4 @@
+# 로컬 개발용. DB·RabbitMQ 연결 설정은 2·4단계에서 추가한다.
+logging:
+  level:
+    com.aworko.server: DEBUG

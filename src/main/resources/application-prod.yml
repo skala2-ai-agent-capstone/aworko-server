@@ -1,0 +1,8 @@
+# EC2 배포용. 비밀값은 환경변수(.env)로만 주입한다.
+springdoc:
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:true}
+
+logging:
+  level:
+    root: INFO

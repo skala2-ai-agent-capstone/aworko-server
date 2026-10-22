@@ -1,0 +1,60 @@
+package com.aworko.server.global.error;
+
+import com.aworko.server.global.common.ApiResponse;
+import java.util.List;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+@Slf4j
+@RestControllerAdvice
+public class GlobalExceptionHandler {
+
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ApiResponse<Void>> handleBusiness(BusinessException e) {
+        return respond(e.getErrorCode(), ErrorResponse.of(e.getErrorCode(), e.getMessage()));
+    }
+
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException e) {
+        List<ErrorResponse.FieldError> fields = e.getBindingResult().getFieldErrors().stream()
+                .map(f -> new ErrorResponse.FieldError(f.getField(), f.getDefaultMessage()))
+                .toList();
+        ErrorCode code = ErrorCode.VALIDATION_ERROR;
+        return respond(code, ErrorResponse.of(code, code.getDefaultMessage(), fields));
+    }
+
+    @ExceptionHandler({
+            HttpMessageNotReadableException.class,
+            MissingServletRequestParameterException.class,
+            MethodArgumentTypeMismatchException.class
+    })
+    public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception e) {
+        ErrorCode code = ErrorCode.VALIDATION_ERROR;
+        return respond(code, ErrorResponse.of(code, code.getDefaultMessage()));
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNoResource(NoResourceFoundException e) {
+        ErrorCode code = ErrorCode.NOT_FOUND;
+        return respond(code, ErrorResponse.of(code, code.getDefaultMessage()));
+    }
+
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnexpected(Exception e) {
+        // 오류 본문에 내부 정보·민감정보가 섞일 수 있으므로 응답에는 일반 문구만 내린다.
+        log.error("Unhandled exception", e);
+        ErrorCode code = ErrorCode.INTERNAL_ERROR;
+        return respond(code, ErrorResponse.of(code, code.getDefaultMessage()));
+    }
+
+    private ResponseEntity<ApiResponse<Void>> respond(ErrorCode code, ErrorResponse body) {
+        return ResponseEntity.status(code.getStatus()).body(ApiResponse.failure(body));
+    }
+}
