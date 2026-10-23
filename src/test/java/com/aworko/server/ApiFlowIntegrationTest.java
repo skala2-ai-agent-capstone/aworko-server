@@ -198,7 +198,7 @@ class ApiFlowIntegrationTest {
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.appeal.comment").value("근거 재확인 요청"))
                     .andExpect(jsonPath("$.data.evaluation.evaluation.evaluation_id").value("EVAL-R1"));
-            // 검토가 배정되면 평가 상세도 열람 가능
+            // 직원이 이의를 제기했고 검토가 배정되면 평가 상세도 열람 가능
             mvc.perform(auth(get("/api/evaluations/EVAL-R1"), lead)).andExpect(status().isOk());
         }
 
@@ -206,6 +206,25 @@ class ApiFlowIntegrationTest {
         void membersAndUnassignedLeadsCannotReview() throws Exception {
             mvc.perform(auth(get("/api/reviews"), member)).andExpect(status().isForbidden());
             mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), otherLead).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"decision\":\"keep\"}")).andExpect(status().isForbidden());
+        }
+
+        @Test
+        void reviewWithoutEmployeeAppealStaysHiddenFromAssignedLead() throws Exception {
+            // Agent 자동 배정('검토 필요' 항목)으로만 생긴 검토. 팀장 본인이 남긴 appeal 기록은 근거가 아니다
+            insertEvaluation("EVAL-R2", "검토 대기");
+            jdbc.update("INSERT INTO review_requests (review_request_id, evaluation_id, target_items, reason, "
+                    + "review_memo, reviewer_id) VALUES ('RVQ-2', 'EVAL-R2', '[\"q.3\"]', '검토 필요', '{}', 'L-3001')");
+            jdbc.update("INSERT INTO human_actions (action_id, work_id, user_id, action, at, payload, payload_masked) "
+                    + "VALUES ('HA-T2', 'W-TEST-QT-01', 'L-3001', 'appeal', now(), '{\"evaluation_id\":\"EVAL-R2\"}', '{}')");
+
+            mvc.perform(auth(get("/api/reviews"), lead))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.length()").value(1))
+                    .andExpect(jsonPath("$.data[0].review_request_id").value("RVQ-1"));
+            mvc.perform(auth(get("/api/reviews/RVQ-2"), lead)).andExpect(status().isForbidden());
+            mvc.perform(auth(get("/api/evaluations/EVAL-R2"), lead)).andExpect(status().isForbidden());
+            mvc.perform(auth(post("/api/reviews/RVQ-2/resolve"), lead).contentType(MediaType.APPLICATION_JSON)
                     .content("{\"decision\":\"keep\"}")).andExpect(status().isForbidden());
         }
 

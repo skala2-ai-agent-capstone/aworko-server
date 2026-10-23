@@ -31,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 팀장(검토자)의 검토. 이의 제기나 채점 불일치로 Agent가 request_review를 하면 business-mcp가 담당 팀장을 배정한다.
+ * 팀장은 직원이 이의를 제기한 평가의 검토만 목록·상세·결정할 수 있다 (EvaluationAccess.hasEmployeeAppeal).
  * keep → 확정, override → 재평가(RESUME review_decision), hold → 자료 보류.
  */
 @Service
@@ -51,7 +52,10 @@ public class ReviewService {
         requireTeamLead(me);
         return reviewRequestRepository.findByReviewerIdOrderByCreatedAtDesc(me.userId()).stream()
                 .flatMap(r -> evaluationRepository.findByEvaluationIdAndCompanyId(r.getEvaluationId(), me.companyId())
-                        .map(e -> summary(r, e, workCaseRepository.findById(e.getWorkId()).orElse(null))).stream())
+                        .flatMap(e -> workCaseRepository.findById(e.getWorkId())
+                                .filter(w -> access.hasEmployeeAppeal(w, e.getEvaluationId()))
+                                .map(w -> summary(r, e, w)))
+                        .stream())
                 .toList();
     }
 
@@ -60,7 +64,7 @@ public class ReviewService {
         ReviewRequest review = assigned(me, reviewRequestId);
         Evaluation evaluation = evaluationService.find(me, review.getEvaluationId());
         WorkCase work = access.workOf(evaluation);
-        access.requireTeamLead(me, work);
+        access.requireAppealReviewer(me, work, evaluation.getEvaluationId());
         return new ReviewDetail(review.getReviewRequestId(), review.getTargetItems(), review.getReason(),
                 review.getReviewMemo(), latestAppeal(work, evaluation).orElse(null),
                 evaluationService.buildDetail(evaluation, work));
@@ -71,7 +75,7 @@ public class ReviewService {
         ReviewRequest review = assigned(me, reviewRequestId);
         Evaluation evaluation = evaluationService.lock(me, review.getEvaluationId());
         WorkCase work = access.workOf(evaluation);
-        access.requireTeamLead(me, work);
+        access.requireAppealReviewer(me, work, evaluation.getEvaluationId());
 
         EvaluationStatus next = switch (request.decision()) {
             case keep -> CONFIRMED;
