@@ -21,11 +21,11 @@ public class User {
     private String userId;
 
     /** 사번. 로그인 ID */
-    @Column(name = "employee_no", unique = true)
+    @Column(name = "employee_no", nullable = false, unique = true)
     private Integer employeeNo;
 
     /** 평문 비밀번호(단순 프로젝트). 응답·로그에 내보내지 않는다. */
-    @Column(name = "password")
+    @Column(name = "password", nullable = false)
     private String password;
 
     @Column(name = "company_id", nullable = false)

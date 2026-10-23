@@ -27,8 +27,8 @@ public class LiveEvaluationController {
     private final LiveEvaluationService liveEvaluationService;
 
     @Operation(summary = "실시간 피드백 요청",
-            description = "업무의 최근 대화 5개로 피드백을 요청한다(202). 사용자별 5분에 1회 — 초과 시 429와 retry_after_seconds. "
-                    + "피드백할 사용자 메시지가 없으면 409.")
+            description = "업무의 최근 완료 질문·응답 최대 5쌍으로 피드백을 요청한다(202). 사용자별 5분에 1회 — 초과 시 429와 "
+                    + "retry_after_seconds. 완료된 질문·응답이 없으면 409, business-mcp에 닿지 못하면 503.")
     @PostMapping
     @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<LiveEvaluationResponse> request(@AuthenticationPrincipal AuthPrincipal me,

@@ -37,6 +37,9 @@ dependencies {
     implementation("org.flywaydb:flyway-core")
     implementation("org.flywaydb:flyway-database-postgresql")
     runtimeOnly("org.postgresql:postgresql")
+    // 고객 자료(PDF·DOCX·XLSX·PPTX)에서 텍스트를 꺼낸다
+    implementation("org.apache.pdfbox:pdfbox:3.0.5")
+    implementation("org.apache.poi:poi-ooxml:5.4.1")
 
     compileOnly("org.projectlombok:lombok")
     annotationProcessor("org.projectlombok:lombok")

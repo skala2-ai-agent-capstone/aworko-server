@@ -11,6 +11,11 @@ spring:
   mvc:
     problemdetails:
       enabled: false
+  servlet:
+    multipart:
+      # 고객 자료 업로드: 파일당 20MB, 「새 업무 생성」 한 번에 여러 파일
+      max-file-size: 20MB
+      max-request-size: 60MB
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5433/axeval}
     username: ${DB_USERNAME:axeval}
@@ -61,6 +66,20 @@ app:
     secret: ${JWT_SECRET:}
     access-token-ttl: ${JWT_ACCESS_TOKEN_TTL:8h}
     issuer: aworko-server
+  mcp:
+    # business-mcp 내부 API. 중간 피드백 요청 행(범위·대화 스냅샷)을 MCP가 만든다
+    base-url: ${MCP_INTERNAL_URL:http://localhost:8001}
+    # MCP의 INTERNAL_API_KEY와 같은 값. 운영(prod)에는 기본값이 없어서 없으면 기동하지 않는다
+    internal-key: ${INTERNAL_API_KEY:}
+    timeout: 5s
+  llm:
+    # 업무 공간 대화. llm-proxy를 거쳐야 대화가 llm_exchanges(→ messages 뷰)에 기록된다
+    base-url: ${LLM_PROXY_URL:http://localhost:4000}
+    # llm-proxy PROXY_KEYS의 workspace-backend 키. 운영(prod)에는 기본값이 없어서 없으면 기동하지 않는다
+    api-key: ${LLM_PROXY_KEY:}
+    model: ${LLM_MODEL:gemma4}
+    # 로컬 LLM(vLLM) 응답 대기 상한
+    timeout: 180s
   live-evaluation:
     # 실시간 피드백 요청 간격(사용자별)
     min-interval: 5m

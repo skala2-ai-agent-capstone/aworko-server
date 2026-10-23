@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 /**
  * DLQ 소비. 메시지를 DB(evaluation_failures 또는 live_evaluations.error)에 남긴 뒤 ack한다.
  * Agent는 DLQ로 보낼 때 실패 사유를 x-failure-reason 헤더에 넣을 수 있다(선택).
+ * 피드백 Worker(ai_agents feedback_rabbit)는 안전한 오류 코드를 error_code 헤더에 넣는다.
  */
 @Slf4j
 @Component
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Component;
 public class DeadLetterListener {
 
     static final String HEADER_REASON = "x-failure-reason";
+    static final String HEADER_ERROR_CODE = "error_code";
 
     private final DeadLetterService deadLetterService;
     private final ObjectMapper objectMapper;
@@ -46,6 +48,9 @@ public class DeadLetterListener {
 
     private static String reason(Message message) {
         Object v = message.getMessageProperties().getHeader(HEADER_REASON);
+        if (v == null) {
+            v = message.getMessageProperties().getHeader(HEADER_ERROR_CODE);
+        }
         return v == null ? null : v.toString();
     }
 }

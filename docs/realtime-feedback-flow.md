@@ -1,11 +1,11 @@
 # 실시간 프롬프팅 피드백 흐름 (서비스 간 계약)
 
 > 대상: 채팅(로컬 LLM) · AI Agent · MCP · 백엔드(Spring) · 프론트엔드 담당자
-> 상태: 2026-10-22 개정 — **버튼 요청 + 폴링** 방식. **[미정]** 표시는 팀 간 합의가 필요한 항목이다.
+> 상태: 2026-10-23 개정 — **버튼 요청 + 폴링** 방식. 요청 행은 business-mcp 내부 API가 만든다(범위·대화 스냅샷 고정). **[미정]** 표시는 팀 간 합의가 필요한 항목이다.
 > DB 구조 기준: [db-schema.json](db-schema.json)
 
 ## 0. 한 줄 요약
-사용자가 **[실시간 피드백] 버튼**을 누르면 백엔드가 최근 대화 5개의 범위를 정해 `live_evaluations` 요청 행을 만들고 RabbitMQ에 **ID만** 발행한다.
+사용자가 **[실시간 피드백] 버튼**을 누르면 백엔드가 business-mcp `POST /internal/live-evaluations`로 요청 행(최근 완료 질문·응답 최대 5쌍, 마스킹된 대화 스냅샷)을 만들고 RabbitMQ에 **ID만** 발행한다.
 Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결과를 저장한다. 프론트는 **폴링**으로 결과를 받는다.
 
 대화 저장은 이 흐름과 별개다. 로컬 LLM과의 대화는 기록 프록시가 `llm_exchanges`에 바로 저장하고, `messages` 뷰로 펼쳐 읽는다.
@@ -16,23 +16,23 @@ Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결
 |---|---|---|
 | 채팅 서버 / 기록 프록시 (로컬 LLM) | 사용자와 LLM 대화, `llm_exchanges`에 대화 저장 | 피드백 요청·발행 |
 | 프론트엔드 | 버튼 → 요청, 2~3초 간격 폴링, 결과·실패·대기 시간 표시 | RabbitMQ·DB 직접 접근 |
-| 백엔드 (Spring) | 인증·권한, 5분 1회 제한, 최근 5개 범위 결정, `live_evaluations`(대기) 생성 + 아웃박스 발행, 상태 조회 API, DLQ 수신 시 `실패` 기록 | 피드백 생성, LLM·MCP 호출, 큐에 대화 원문 넣기 |
+| 백엔드 (Spring) | 인증·권한, 5분 1회 제한, business-mcp 내부 API로 요청 행(대기) 생성 + 아웃박스 발행, 상태 조회 API, DLQ 수신 시 `실패` 기록 | 피드백 생성, LLM 호출, 범위·스냅샷 직접 계산, 큐에 대화 원문 넣기 |
 | RabbitMQ | 피드백 요청 전달, 재시도·DLQ | 업무 규칙 판단 |
 | AI Agent (Worker) | 메시지 소비 → MCP로 대화 읽기 → LLM 피드백 → MCP로 결과 저장 | DB 직접 접근, 백엔드 호출, 마스킹 전 원문을 LLM에 전달 |
-| business-mcp | 대화 범위 조회 도구, 피드백 결과 저장 도구(중복 방지) | 권한 우회, 회사 범위 없는 조회 |
+| business-mcp | 요청 행 생성(내부 API: 최근 완료 5쌍 범위·유형·현행 기준·대화 스냅샷 고정), 대화 조회 도구, 피드백 결과 저장 도구(중복 방지) | 권한 우회, 회사 범위 없는 조회 |
 
 ## 2. 처리 흐름
 
 ```
 [브라우저] ─① POST /api/live-evaluations {work_id}─▶ [Spring]
-                                                      │ ② 권한·5분 제한 확인, 최근 5개 seq 범위 조회
-                                                      │ ③ live_evaluations(대기) + outbox (1 트랜잭션)
+                                                      │ ② 권한·5분 제한 확인
+                                                      │ ③ business-mcp POST /internal/live-evaluations → live_evaluations(대기), 이어서 outbox
 [브라우저] ◀─ 202 {live_eval_id} ─────────────────────┤
                                                       └─④ outbox 릴레이 → RabbitMQ live_evaluation.requests {live_eval_id, …}
                                                                                      │
 [AI Agent] ◀─⑤ 소비──────────────────────────────────────────────────────────────────┘
      ├─⑥ MCP start_live_evaluation(live_eval_id)          → status = 생성 중
-     ├─⑦ MCP get_messages(work_id, from_seq, to_seq)      → 마스킹된 대화 5개
+     ├─⑦ MCP get_messages(work_id, from_seq, to_seq)      → 요청 때 고정한 마스킹 대화(최대 5쌍)
      ├─⑧ LLM 피드백 생성
      └─⑨ MCP save_live_evaluation(live_eval_id, items, coaching) → status = 완료  (같은 키 재저장은 기존 결과 반환)
 
@@ -43,8 +43,8 @@ Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결
 | 단계 | 구간 | 방식 | 내용 |
 |---|---|---|---|
 | ① | 브라우저 → Spring | HTTPS + JWT | 피드백 요청. 대상 업무(`work_id`) 지정 |
-| ② | Spring → DB | JDBC | 업무 소유자 확인, 사용자의 마지막 요청 시각 확인(5분), `messages`에서 해당 업무의 최근 5개 `seq` 범위 조회 |
-| ③ | Spring → DB | JDBC | `live_evaluations`(status=대기, from_seq·to_seq 고정)와 `outbox_events`를 한 트랜잭션에 기록 |
+| ② | Spring → DB | JDBC | 업무 소유자 확인, 사용자의 마지막 요청 시각 확인(5분) |
+| ③ | Spring → business-mcp → DB | HTTP(`X-Internal-Key`) | MCP가 `conversation_pairs`에서 요청 시각까지 성공한 최근 완료 질문·응답 최대 5쌍을 골라 `live_evaluations`(대기, from_seq·to_seq·유형·현행 기준·대화 스냅샷)를 커밋. 백엔드는 응답의 범위로 `outbox_events`를 기록 |
 | ④ | Spring → RabbitMQ | AMQP | 아웃박스 릴레이가 발행 (ID만) |
 | ⑤ | RabbitMQ → Agent | AMQP | Worker가 소비 |
 | ⑥ | Agent → MCP → DB | MCP | 상태를 `생성 중`으로 변경 (대기일 때만) |
@@ -53,7 +53,7 @@ Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결
 | ⑨ | Agent → MCP → DB | MCP | 결과 저장, `완료`로 변경 → ack |
 | ⑩ | 브라우저 → Spring | HTTPS + JWT | 상태·결과 폴링 |
 
-**버튼을 누른 순간의 대화 범위(from_seq~to_seq)를 고정한다.** 그 사이 대화가 더 진행돼도 Agent는 요청한 5개로 피드백한다.
+**버튼을 누른 순간의 대화 범위(from_seq~to_seq)를 고정한다.** 그 사이 대화가 더 진행돼도 Agent는 요청 때 고정한 스냅샷(최대 5쌍)으로 피드백한다.
 
 ## 3. 백엔드 API
 
@@ -67,12 +67,13 @@ Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결
 | 상황 | 코드 | 비고 |
 |---|---|---|
 | 5분 안에 다시 요청 | **429** | `retry_after_seconds` 포함. 프론트는 "N분 후 다시 요청할 수 있어요" 표시 |
-| 피드백할 사용자 메시지가 없음 | 409 | |
+| 완료된 질문·응답 쌍이 없음 | 409 | MCP `VALIDATION_ERROR` |
+| business-mcp 연결 실패·내부 키 오류 | 503 | |
 | 남의 업무·다른 회사 | 403 | |
 | 없는 요청 ID | 404 | |
 
 - 5분 제한은 `live_evaluations.requested_at` 기준, **사용자별**이다(업무가 달라도 5분에 1회).
-- 대화가 5개보다 적으면 있는 만큼만 범위로 잡는다.
+- 완료 쌍이 5개보다 적으면 있는 만큼(1~4쌍)만 범위로 잡는다. 답이 없는 마지막 질문은 넣지 않는다.
 
 ### 프론트 폴링 규칙
 - 202를 받으면 `GET /api/live-evaluations/{id}`를 **2~3초 간격**으로 호출한다.
@@ -119,10 +120,11 @@ Agent는 MCP로 대화를 읽어 피드백을 만들고 MCP로 같은 행에 결
 
 | 칸 | 쓰는 쪽 | 내용 |
 |---|---|---|
-| `live_eval_id` | 백엔드 | `LIVE-{12자리}`. 큐 중복 방지 키 |
-| `work_id`, `requested_by`, `requested_at` | 백엔드 | 요청 정보. `requested_at`으로 5분 제한 판단 |
-| `from_seq`, `to_seq` | 백엔드 | `messages.seq` 범위(최근 5개) |
-| `rubric_doc_id`, `rubric_version` | 백엔드 | 업무 유형의 현행 루브릭(없으면 NULL) |
+| `live_eval_id` | business-mcp | `LIVE-…`. 큐 중복 방지 키 |
+| `work_id`, `requested_by`, `requested_at` | business-mcp | 요청 정보. `requested_at`으로 5분 제한 판단 |
+| `from_seq`, `to_seq` | business-mcp | 최근 완료 질문·응답 최대 5쌍의 첫 질문~마지막 답변 `seq` |
+| `work_type`, `rubric_doc_id`, `rubric_version` | business-mcp | 업무 유형과 현행 루브릭(없으면 NULL) |
+| `conversation_snapshot` | business-mcp | 요청 때 고정한 마스킹 대화·exchange ID·마스킹 버전. `get_messages`가 이것을 읽는다 |
 | `status` | 백엔드(대기·실패) / Agent(생성 중·완료·실패) | `대기` → `생성 중` → `완료` 또는 `실패` |
 | `items`, `coaching` | Agent | 피드백 결과(jsonb). **[미정] 구조** |
 | `model`, `latency_ms`, `error` | Agent | 실행 정보 |

@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.aworko.server.global.security.AuthPrincipal;
 import com.aworko.server.global.security.JwtProvider;
 import com.aworko.server.organization.UserRole;
+import com.aworko.server.support.FakeLiveRequests;
 import com.aworko.server.support.TestcontainersConfiguration;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,12 +28,12 @@ import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilde
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 평가·검토·실시간 피드백·팀 대시보드 API를 실제 Postgres(목표 스키마) 위에서 확인한다.
+ * 평가·검토·실시간 피드백·팀 대시보드 API를 실제 Postgres(MCP 스키마) 위에서 확인한다.
  * 테스트마다 트랜잭션을 롤백하므로 서로 영향을 주지 않는다. 아웃박스 릴레이는 끈다(메시지는 outbox_events로 확인).
  */
 @SpringBootTest(properties = "app.messaging.outbox.enabled=false")
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, FakeLiveRequests.class})
 @Sql("/db/seed_minimal.sql")
 @Transactional
 class ApiFlowIntegrationTest {
@@ -236,27 +237,35 @@ class ApiFlowIntegrationTest {
     @Nested
     class LiveEvaluations {
 
+        /**
+         * messages는 llm_exchanges를 펼친 뷰다. 성공 호출 6번(질문+답변) + 실패 호출 1번(질문만) → seq 1~13, 13번은 답 없는 질문.
+         * 최근 완료 5쌍은 seq 3~12다(메시지 5개가 아니다).
+         */
         @BeforeEach
         void conversation() {
-            for (int seq = 1; seq <= 7; seq++) {
-                jdbc.update("INSERT INTO messages (message_id, work_id, seq, role, content, content_masked, created_at) "
-                                + "VALUES (?, 'W-TEST-QT-01', ?, ?, 'x', 'x', now())",
-                        "W-TEST-QT-01-M" + seq, seq, seq % 2 == 1 ? "user" : "assistant");
+            for (int call = 1; call <= 7; call++) {
+                boolean failed = call == 7;
+                jdbc.update("INSERT INTO llm_exchanges (work_id, stage, request, response, error) "
+                                + "VALUES ('W-TEST-QT-01', 'workspace_chat', ?::jsonb, ?::jsonb, ?)",
+                        "{\"messages\":[{\"role\":\"user\",\"content\":\"q" + call + "\"}]}",
+                        failed ? null : "{\"choices\":[{\"message\":{\"content\":\"a" + call + "\"}}]}",
+                        failed ? "upstream_error" : null);
             }
         }
 
         @Test
-        void requestFixesLastFiveMessagesQueuesAndLimitsToOncePerFiveMinutes() throws Exception {
+        void requestFixesRecentFivePairsQueuesAndLimitsToOncePerFiveMinutes() throws Exception {
             String body = "{\"work_id\":\"W-TEST-QT-01\"}";
             String response = mvc.perform(auth(post("/api/live-evaluations"), member)
                             .contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isAccepted())
                     .andExpect(jsonPath("$.data.status").value("대기"))
                     .andExpect(jsonPath("$.data.from_seq").value(3))
-                    .andExpect(jsonPath("$.data.to_seq").value(7))
+                    .andExpect(jsonPath("$.data.to_seq").value(12))
                     .andReturn().getResponse().getContentAsString();
             String liveId = response.replaceAll(".*\"live_eval_id\":\"([^\"]+)\".*", "$1");
-            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'LIVE_EVALUATE'")).isEqualTo(1);
+            assertThat(jdbc.queryForObject("SELECT payload->>'from_seq' || '~' || (payload->>'to_seq') FROM outbox_events "
+                    + "WHERE type = 'LIVE_EVALUATE' AND aggregate_id = ?", String.class, liveId)).isEqualTo("3~12");
 
             mvc.perform(auth(post("/api/live-evaluations"), member).contentType(MediaType.APPLICATION_JSON).content(body))
                     .andExpect(status().isTooManyRequests())
@@ -266,7 +275,23 @@ class ApiFlowIntegrationTest {
 
             mvc.perform(auth(get("/api/live-evaluations/" + liveId), member))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.data.live_eval_id").value(liveId));
+                    .andExpect(jsonPath("$.data.live_eval_id").value(liveId))
+                    .andExpect(jsonPath("$.data.phase").value("waiting"))
+                    .andExpect(jsonPath("$.data.display").doesNotExist());
+            // Agent가 저장한 결과는 패널이 그대로 쓰는 모양(display)으로도 내려간다
+            jdbc.update("UPDATE live_evaluations SET status = '완료', items = ?::jsonb, coaching = ?::jsonb WHERE live_eval_id = ?",
+                    "[{\"item_id\":\"f1\",\"kind\":\"improvement\",\"diagnosis\":\"자료와 대조하지 않았어요\",\"evidence\":[]}]",
+                    "{\"schema_version\":\"1\",\"provenance\":{},\"suggestions\":[{\"item_id\":\"f1\","
+                            + "\"target_message_id\":\"m\",\"next_action\":\"가격표와 대조해 보세요\",\"suggested_prompt\":\"가격표 v2와 대조해줘\"}]}",
+                    liveId);
+            entityManager.clear();
+            mvc.perform(auth(get("/api/live-evaluations/" + liveId), member))
+                    .andExpect(jsonPath("$.data.phase").value("done"))
+                    .andExpect(jsonPath("$.data.display.items[0].label").value("보완할 점"))
+                    .andExpect(jsonPath("$.data.display.items[0].state").value("warn"))
+                    .andExpect(jsonPath("$.data.display.items[0].note").value("자료와 대조하지 않았어요"))
+                    .andExpect(jsonPath("$.data.display.coaching").value("가격표와 대조해 보세요"))
+                    .andExpect(jsonPath("$.data.display.suggested_prompt").value("가격표 v2와 대조해줘"));
             mvc.perform(auth(get("/api/live-evaluations/" + liveId), lead)).andExpect(status().isForbidden());
         }
 

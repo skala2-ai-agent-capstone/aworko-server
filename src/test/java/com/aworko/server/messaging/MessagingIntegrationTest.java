@@ -140,16 +140,18 @@ class MessagingIntegrationTest {
     }
 
     @Test
-    void liveDeadLetterMarksRequestFailed() {
+    void liveDeadLetterMarksRequestFailedWithWorkerErrorCode() {
         LiveEvaluation live = tx.execute(s -> liveEvaluations.save(
                 LiveEvaluation.request("W-TEST-QT-01", "E-1021", 1, 5, null, null, OffsetDateTime.now())));
 
-        rabbitTemplate.send(Topology.LIVE_EXCHANGE, Topology.RK_LIVE_DLQ,
-                json("{\"live_eval_id\":\"" + live.getLiveEvalId() + "\"}"));
+        // 피드백 Worker는 사유를 error_code 헤더에 넣는다
+        Message dead = MessageBuilder.fromMessage(json("{\"live_eval_id\":\"" + live.getLiveEvalId() + "\"}"))
+                .setHeader(DeadLetterListener.HEADER_ERROR_CODE, "MCP_REJECTED").build();
+        rabbitTemplate.send(Topology.LIVE_EXCHANGE, Topology.RK_LIVE_DLQ, dead);
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertThat(jdbc.queryForObject("SELECT status FROM live_evaluations WHERE live_eval_id = ?",
-                        String.class, live.getLiveEvalId())).isEqualTo("실패"));
+                assertThat(jdbc.queryForMap("SELECT status, error FROM live_evaluations WHERE live_eval_id = ?",
+                        live.getLiveEvalId())).containsEntry("status", "실패").containsEntry("error", "MCP_REJECTED"));
     }
 
     private static Message json(String body) {

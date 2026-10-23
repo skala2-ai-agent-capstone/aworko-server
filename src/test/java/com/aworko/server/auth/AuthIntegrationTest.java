@@ -64,7 +64,7 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void legacySeedRoleIsReadAsMemberAndUserWithoutTeamHasNoTeamName() throws Exception {
+    void userWithoutTeamHasNoTeamName() throws Exception {
         mockMvc.perform(loginRequest(4001, "1234"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.user.role").value("member"))

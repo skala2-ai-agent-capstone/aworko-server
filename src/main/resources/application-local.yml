@@ -3,6 +3,12 @@ app:
   jwt:
     # 로컬 전용 기본값. 운영(prod)에는 기본값이 없어서 JWT_SECRET이 없으면 기동하지 않는다.
     secret: ${JWT_SECRET:local-dev-only-jwt-secret-change-me-32bytes+}
+  mcp:
+    # 로컬 전용 기본값. 로컬 business-mcp에 붙일 때는 mcp_servers/.env의 INTERNAL_API_KEY를 넣는다
+    internal-key: ${INTERNAL_API_KEY:local-dev-only-internal-key}
+  llm:
+    # 로컬 전용 기본값. 로컬 llm-proxy에 붙일 때는 PROXY_KEYS의 workspace-backend 키를 넣는다
+    api-key: ${LLM_PROXY_KEY:local-dev-only-proxy-key}
 
 logging:
   level:
