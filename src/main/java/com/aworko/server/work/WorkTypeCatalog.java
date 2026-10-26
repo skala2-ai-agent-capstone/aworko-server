@@ -3,9 +3,9 @@ package com.aworko.server.work;
 import com.aworko.server.work.dto.WorkTypeInfo;
 import com.aworko.server.work.dto.WorkTypeInfo.Field;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 /**
  * 업무 유형별 산출물 이름과 등록 항목. 항목 key는 시드 업무의 work_cases.registration과 같아서
@@ -66,10 +66,17 @@ public final class WorkTypeCatalog {
         throw new IllegalArgumentException(value);
     }
 
-    /** 등록 항목 key → 화면 이름 */
+    /** 「새 업무 생성」의 목적·요구사항 한 칸. 유형별 등록 항목과 따로 registration.purpose로 저장된다 */
+    public static final String PURPOSE_KEY = "purpose";
+
+    /** 등록 항목 key → 화면 이름. 목적·요구사항이 먼저, 나머지는 유형별 항목 순서 */
     public static Map<String, String> registrationLabels(WorkType type) {
-        return type == null ? Map.of() : INFO.get(type).registrationFields().stream()
-                .collect(Collectors.toMap(Field::key, Field::label));
+        Map<String, String> labels = new LinkedHashMap<>();
+        labels.put(PURPOSE_KEY, "목적·요구사항");
+        if (type != null) {
+            INFO.get(type).registrationFields().forEach(f -> labels.put(f.key(), f.label()));
+        }
+        return labels;
     }
 
     private static WorkTypeInfo info(WorkType type, String artifactTitle, Field... fields) {

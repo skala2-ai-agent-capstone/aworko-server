@@ -15,6 +15,8 @@ import com.aworko.server.global.security.AuthPrincipal;
 import com.aworko.server.humanaction.HumanAction;
 import com.aworko.server.humanaction.HumanActionRepository;
 import com.aworko.server.humanaction.HumanActionType;
+import com.aworko.server.organization.User;
+import com.aworko.server.organization.UserRepository;
 import com.aworko.server.organization.UserRole;
 import com.aworko.server.work.WorkCase;
 import com.aworko.server.work.WorkCaseRepository;
@@ -45,6 +47,7 @@ public class ReviewService {
     private final EvaluationService evaluationService;
     private final EvaluationAccess access;
     private final ReviewRecords reviewRecords;
+    private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -54,7 +57,7 @@ public class ReviewService {
                 .flatMap(r -> evaluationRepository.findByEvaluationIdAndCompanyId(r.getEvaluationId(), me.companyId())
                         .flatMap(e -> workCaseRepository.findById(e.getWorkId())
                                 .filter(w -> access.hasEmployeeAppeal(w, e.getEvaluationId()))
-                                .map(w -> summary(r, e, w)))
+                                .map(w -> summary(r, e, w, nameOf(w.getEmployeeId(), me.companyId()))))
                         .stream())
                 .toList();
     }
@@ -136,14 +139,20 @@ public class ReviewService {
                 .max(Comparator.comparing(HumanAction::getAt))
                 .map(a -> new ReviewDetail.Appeal(a.getPayload().path("comment").asText(null),
                         a.getPayload().get("target_items"), a.getPayload().get("cited_evidence"), a.getUserId(),
-                        a.getAt()));
+                        nameOf(a.getUserId(), work.getCompanyId()), a.getAt()));
     }
 
-    private static ReviewSummary summary(ReviewRequest r, Evaluation e, WorkCase work) {
+    private String nameOf(String userId, String companyId) {
+        return userId == null ? null
+                : userRepository.findByUserIdAndCompanyId(userId, companyId).map(User::getName).orElse(null);
+    }
+
+    private static ReviewSummary summary(ReviewRequest r, Evaluation e, WorkCase work, String employeeName) {
         return new ReviewSummary(r.getReviewRequestId(), e.getEvaluationId(), e.getWorkId(),
                 work == null ? null : work.getTitle(),
                 work == null || work.getWorkType() == null ? null : work.getWorkType().getCode(),
-                work == null ? null : work.getEmployeeId(), r.getTargetItems(), r.getReason(),
+                work == null || work.getWorkType() == null ? null : work.getWorkType().getLabel(),
+                work == null ? null : work.getEmployeeId(), employeeName, r.getTargetItems(), r.getReason(),
                 e.getStatus().getCode(), e.getStatus().displayLabel(), r.getCreatedAt());
     }
 }

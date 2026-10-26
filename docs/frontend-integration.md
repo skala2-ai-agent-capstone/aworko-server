@@ -79,6 +79,7 @@ const res = await fetch('/api/works', { method: 'POST', headers: { Authorization
 | `type` | `summary.work_type_label` |
 | `status` | `summary.stage` |
 | `purpose` | `registration.purpose` (텍스트. HTML 아님, 줄바꿈 그대로) |
+| 업무 정보 패널 | `registration_items[]` `{key, label, value}` — 화면 이름과 함께 순서대로 펼친 것. `label`을 그대로 쓴다 |
 | `customerRefs` | `source_documents[].file_name` |
 | `internalRefs` | `internal_references[].title` |
 | `artifactTitle` | `artifact_title` |
@@ -86,6 +87,7 @@ const res = await fetch('/api/works', { method: 'POST', headers: { Authorization
 | `artifactBody` | `artifact.content` (텍스트·마크다운) |
 
 - 원본 내려받기: `GET /api/works/{id}/source-documents/{attachment_id}/file` (본인만)
+- `internal_references[].source`: `attached`(담당자가 지정) | `accessed`(담당자가 열람만 함). 둘 다면 `attached`로 한 번 나온다.
 - `editable`이 false면 팀장이 다른 사람 업무를 보는 경우다. 읽기만 하게 한다(입력창·저장 버튼 숨김).
 
 대화:
@@ -95,11 +97,20 @@ const res = await fetch('/api/works', { method: 'POST', headers: { Authorization
   - 실패하면 503이다. 질문만 기록에 남는다.
 - 본문은 텍스트다. `dangerouslySetInnerHTML` 대신 텍스트로 넣거나 마크다운 렌더러를 쓴다.
 
+사내 자료(제품 설명서·가격표·확정 견적·내규):
+
+- 고를 목록: `GET /api/references` → `[{doc_id, version, title, collection, status, effective_from}]`. 기밀은 빠진다. 폐기·초안 버전도 `status`와 함께 오므로 상태를 같이 보여 준다(현행 버전을 고르는 것도 평가 대상).
+- 지정: `POST /api/works/{id}/references {doc_id, version}` → 201 `{doc_id, version, title, source: attached}`. 본인만, 다시 보내도 한 번만 들어간다.
+- 지정 해제: `DELETE /api/works/{id}/references/{doc_id}/{version}` (지정 안 된 자료면 404)
+- 열람: `GET /api/works/{id}/references/{doc_id}/{version}` → `{..., content}`. 본인이 열면 열람 기록이 남아 평가(결과 검증)에 쓰인다. 팀장은 기록 없이 읽기만.
+- 지정한 자료 본문은 AI 대화에 자동으로 붙는다. 최종 완료 때 지정·열람 기록이 평가 스냅샷에 들어간다.
+
 산출물:
 
 - 「초안 저장」: `POST /api/works/{id}/artifacts {content}` → 새 버전 `{artifact_id, version}` (v1, v2 …)
 - 「최종 완료」: `POST /api/work-events {task_id: work_id, deliverable_version: 방금 저장한 version}` → 업무가 완료되고 평가가 시작된다(`stage`가 평가 중으로 바뀜).
   - 유형이 없으면 409다.
+  - 새 버전으로 다시 완료하는 것은 최근 평가가 `평가 실패`·`자료 보류`일 때만 된다. `평가 중`·`확인 대기`·`검토 중`·`확정`이면 409다. 화면에서는 `summary.stage`가 `작성 중`·`평가 실패`·`자료 보류`일 때만 「최종 완료」를 켠다. 같은 버전을 다시 보내는 재시도는 기존 평가 건을 돌려준다(`created=false`).
 - 문서 영역(`doc-body`)을 편집 가능하게 만들어 그 텍스트를 저장하면 된다.
 
 ### 실시간 피드백 `useLiveFeedback` · `LiveFeedbackPanel`
@@ -123,6 +134,8 @@ if (d.phase === 'done') setResult(d.display);          // {items:[{label, state,
 
 - 평가 중 → 확인 대기: Agent가 초안·코칭을 저장하면 백엔드가 완료 알림을 받아 바꾼다. 리포트 화면은 `display_status`를 폴링하면 된다.
 - 이의 제기 `POST /api/evaluations/{id}/appeals` → 202, 응답 `status`가 바로 `검토 대기`다(담당 팀장에게 검토 요청이 배정됨). `target_items`는 item_id나 항목 이름, 평가에 없는 항목이면 400.
+- 검토 목록 `GET /api/reviews`는 처리가 끝난 건(`확정` 등)도 함께 준다. 처리할 건은 `status == '검토 대기'`인 것뿐이다. 행에 `work_type_label`·`employee_name`이 있다.
+- 검토 상세의 이의 제기 `appeal.submitted_by_name`이 직원 이름이다. 결정(`resolve`)은 평가가 `검토 대기`일 때만 되고 그 밖에는 409다.
 - 검토 결정 `override`는 `new_scores`가 필수다(항목별 0~2, 보안 준수는 0·2). 팀장 점수가 새 초안으로 반영되고 `확인 대기`로 돌아간다. AI 재평가는 하지 않는다. 화면 안내 「재평가 후 본인 확인 단계로 돌아가요」는 「수정한 점수로 본인 확인 단계로 돌아가요」가 맞다.
 
 ### 팀 코칭 리포트 `TeamDashboardPage` (팀장)
@@ -174,5 +187,5 @@ if (d.phase === 'done') setResult(d.display);          // {items:[{label, state,
 | --- | --- |
 | 운영 설정: 제품 설명서·가격표 업로드 | 적재 경로(MCP)가 내규만 있다. 내규 업로드는 위 API |
 | 평가 기준 항목별 변경 이력 | 저장할 테이블이 없다(버전 단위 기록은 `note`·`effective_from`) |
-| 대화 중 사내 자료 자동 참고(RAG) | rag-mcp를 업무 공간에서 부를 토큰 종류가 아직 없다 |
+| 대화 중 사내 자료 자동 검색(RAG) | rag-mcp를 업무 공간에서 부를 토큰 종류가 아직 없다. 대신 담당자가 지정한 자료(위 사내 자료) 본문을 대화에 붙인다 |
 | 다른 회사로 전환 | 사용자는 회사 1곳 소속 |

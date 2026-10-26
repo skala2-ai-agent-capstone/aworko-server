@@ -22,7 +22,9 @@ public class WorkEventController {
 
     @Operation(summary = "업무 완료 접수",
             description = "최종본 저장·업무 완료 시 호출한다. 평가 건을 만들고 평가 요청을 큐에 넣은 뒤 바로 202를 돌려준다. "
-                    + "같은 업무·버전을 다시 보내면 기존 평가 건을 돌려준다(created=false).")
+                    + "같은 업무·버전을 다시 보내면 기존 평가 건을 돌려준다(created=false). "
+                    + "새 버전으로 다시 완료하는 것은 최근 평가가 평가 실패·자료 보류일 때만 되고, "
+                    + "평가 중·확인 대기·검토 중·확정이면 409다.")
     @PostMapping("/api/work-events")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<WorkEventResponse> complete(@AuthenticationPrincipal AuthPrincipal me,
