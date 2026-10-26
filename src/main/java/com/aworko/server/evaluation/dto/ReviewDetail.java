@@ -14,6 +14,7 @@ public record ReviewDetail(
         EvaluationDetail evaluation) {
 
     public record Appeal(String comment, JsonNode targetItems, JsonNode citedEvidence, String submittedBy,
+                         @Schema(description = "이의를 제기한 직원 이름", nullable = true) String submittedByName,
                          OffsetDateTime submittedAt) {
     }
 }

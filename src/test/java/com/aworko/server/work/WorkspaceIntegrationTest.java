@@ -3,6 +3,7 @@ package com.aworko.server.work;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.hasItem;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -89,10 +90,16 @@ class WorkspaceIntegrationTest {
                 .andExpect(jsonPath("$.data.editable").value(true))
                 .andExpect(jsonPath("$.data.artifact_title").value("요구사항 대응표"))
                 .andExpect(jsonPath("$.data.registration.customer_purpose").value("담당 010-1234-5678로 회신"))
-                .andExpect(jsonPath("$.data.registration.submission_deadline").value(""));
+                .andExpect(jsonPath("$.data.registration.submission_deadline").value(""))
+                // 화면 이름과 함께 유형별 항목 순서로 펼친다
+                .andExpect(jsonPath("$.data.registration_items.length()").value(2))
+                .andExpect(jsonPath("$.data.registration_items[0].label").value("제출 기한"))
+                .andExpect(jsonPath("$.data.registration_items[1].key").value("customer_purpose"))
+                .andExpect(jsonPath("$.data.registration_items[1].label").value("고객 목적"));
         mvc.perform(auth(get("/api/works/" + workId), lead)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.editable").value(false))
-                .andExpect(jsonPath("$.data.registration.customer_purpose").value("담당 [전화번호]로 회신"));
+                .andExpect(jsonPath("$.data.registration.customer_purpose").value("담당 [전화번호]로 회신"))
+                .andExpect(jsonPath("$.data.registration_items[1].value").value("담당 [전화번호]로 회신"));
         mvc.perform(auth(get("/api/works/" + workId), outsider)).andExpect(status().isForbidden());
 
         // 시드와 같은 트랜잭션이라 생성 시각이 같아 순서는 보지 않는다
@@ -122,6 +129,7 @@ class WorkspaceIntegrationTest {
                 .andExpect(jsonPath("$.data.summary.customer_name").doesNotExist())
                 .andExpect(jsonPath("$.data.customer_id").doesNotExist())
                 .andExpect(jsonPath("$.data.registration.purpose").value("목적: SI 제안 사전 분석"))
+                .andExpect(jsonPath("$.data.registration_items[0].label").value("목적·요구사항"))
                 .andExpect(jsonPath("$.data.source_documents.length()").value(3))
                 .andExpect(jsonPath("$.data.source_documents[?(@.file_name == 'RFP_원문.txt')].text_extracted", hasItem(true)))
                 .andExpect(jsonPath("$.data.source_documents[?(@.file_name == '스캔.hwp')].text_extracted", hasItem(false)))
@@ -131,7 +139,8 @@ class WorkspaceIntegrationTest {
 
         // 꺼낸 텍스트(txt·docx)가 대화 문맥에 들어간다
         send(workId, member, "요구사항 정리").andExpect(status().isOk());
-        assertThat(llm.last().get(0).get("content")).contains("REQ-01 SSO 지원", "회의: 국내 리전 필수", "목적: SI 제안 사전 분석");
+        assertThat(llm.last().get(0).get("content")).contains("REQ-01 SSO 지원", "회의: 국내 리전 필수",
+                "목적·요구사항: 목적: SI 제안 사전 분석");
 
         String hwpId = jdbc.queryForObject("SELECT attachment_id FROM source_documents WHERE work_id = ? AND file_name = '스캔.hwp'",
                 String.class, workId);
@@ -292,6 +301,61 @@ class WorkspaceIntegrationTest {
                 .andExpect(jsonPath("$.data.items[0].evidence_sources[0]").value("registration"));
         mvc.perform(auth(get("/api/settings/rubrics/RUB-none/v1"), lead)).andExpect(status().isNotFound());
         mvc.perform(auth(get("/api/settings/documents"), member)).andExpect(status().isForbidden());
+    }
+
+    @Test
+    void internalReferencesCanBeAttachedReadAndReachTheChat() throws Exception {
+        jdbc.update("INSERT INTO documents (doc_id, version, company_id, title, grade, collection, indexed, status, "
+                + "effective_from, content) VALUES "
+                + "('PROD-X', 'v2', ?, '제품 설명서', '사내', 'references', true, '현행', '2026-02-01', 'SSO는 SAML 2.0만 지원'), "
+                + "('PROD-X', 'v1', ?, '제품 설명서', '사내', 'references', true, '폐기', '2025-01-01', '예전 내용'), "
+                + "('COST-X', 'v1', ?, '원가표', '기밀', NULL, false, '현행', NULL, '원가 비밀')",
+                COMPANY, COMPANY, COMPANY);
+        String workId = createWork("inquiry_reply", Map.of("question_original", "SSO 지원하나요?"));
+
+        // 기밀(색인 안 함)은 빠지고, 폐기 버전은 상태와 함께 나온다
+        mvc.perform(auth(get("/api/references"), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[*].doc_id", hasItem("PROD-X")))
+                .andExpect(jsonPath("$.data[?(@.doc_id == 'COST-X')]").isEmpty())
+                .andExpect(jsonPath("$.data[?(@.doc_id == 'PROD-X' && @.version == 'v1')].status", hasItem("폐기")));
+
+        attach(workId, member, "PROD-X", "v2").andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.source").value("attached"))
+                .andExpect(jsonPath("$.data.title").value("제품 설명서"));
+        attach(workId, member, "PROD-X", "v2").andExpect(status().isCreated());
+        attach(workId, member, "COST-X", "v1").andExpect(status().isNotFound());
+        attach(workId, lead, "PROD-X", "v1").andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM attached_references WHERE work_id = ?", Integer.class, workId))
+                .isEqualTo(1);
+
+        // 담당자 본인의 열람만 기록한다
+        mvc.perform(auth(get("/api/works/" + workId + "/references/PROD-X/v2"), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content").value("SSO는 SAML 2.0만 지원"))
+                .andExpect(jsonPath("$.data.status").value("현행"));
+        mvc.perform(auth(get("/api/works/" + workId + "/references/PROD-X/v1"), lead)).andExpect(status().isOk());
+        mvc.perform(auth(get("/api/works/" + workId + "/references/COST-X/v1"), member)).andExpect(status().isNotFound());
+        assertThat(jdbc.queryForList("SELECT user_id || ':' || doc_id || ':' || version FROM reference_access_logs "
+                + "WHERE work_id = ? ORDER BY seq", String.class, workId)).containsExactly("E-1021:PROD-X:v2");
+        mvc.perform(auth(get("/api/works/" + workId), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.internal_references.length()").value(1))
+                .andExpect(jsonPath("$.data.internal_references[0].source").value("attached"));
+
+        send(workId, member, "SSO 지원 여부 회신 써줘").andExpect(status().isOk());
+        assertThat(llm.last().get(0).get("content"))
+                .contains("[사내 참고 자료]", "PROD-X v2 제품 설명서 (현행)", "SSO는 SAML 2.0만 지원")
+                .doesNotContain("원가 비밀", "예전 내용");
+
+        mvc.perform(auth(delete("/api/works/" + workId + "/references/PROD-X/v2"), member)).andExpect(status().isOk());
+        mvc.perform(auth(delete("/api/works/" + workId + "/references/PROD-X/v2"), member))
+                .andExpect(status().isNotFound());
+        // 지정을 풀어도 열람 기록은 남아 accessed로 보인다
+        mvc.perform(auth(get("/api/works/" + workId), member)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.internal_references[0].source").value("accessed"));
+    }
+
+    private ResultActions attach(String workId, String token, String docId, String version) throws Exception {
+        return mvc.perform(auth(post("/api/works/" + workId + "/references"), token).contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(Map.of("doc_id", docId, "version", version))));
     }
 
     private String createWork(String workType, Map<String, String> registration) throws Exception {

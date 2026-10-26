@@ -164,7 +164,7 @@ public class WorkspaceController {
     }
 
     @Operation(summary = "AI에게 메시지 보내기",
-            description = "업무 등록 내용·고객 자료·이전 대화를 붙여 llm-proxy로 보내고 답변을 돌려준다(최대 수 분). "
+            description = "업무 등록 내용·고객 자료·지정한 사내 자료·이전 대화를 붙여 llm-proxy로 보내고 답변을 돌려준다(최대 수 분). "
                     + "대화 기록(seq)은 프록시가 저장한 뒤 GET .../messages에 나타난다. LLM에 닿지 못하면 503")
     @PostMapping("/api/works/{workId}/messages")
     public ApiResponse<ChatTurnResponse> send(@AuthenticationPrincipal AuthPrincipal me, @PathVariable String workId,

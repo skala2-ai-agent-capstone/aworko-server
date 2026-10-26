@@ -14,7 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 /**
- * 업무 공간 대화. 담당자 본인만. 업무 등록 내용·고객 자료·이전 대화를 붙여 llm-proxy로 보내고 답변을 돌려준다.
+ * 업무 공간 대화. 담당자 본인만. 업무 등록 내용·고객 자료·지정한 사내 자료·이전 대화를 붙여 llm-proxy로 보내고 답변을 돌려준다.
  * 대화 기록은 프록시가 llm_exchanges에 남기며 messages 뷰로 읽는다(백엔드는 따로 저장하지 않는다).
  * LLM 응답을 기다리는 동안 DB 트랜잭션을 잡지 않는다.
  */
@@ -25,6 +25,7 @@ public class WorkspaceChatService {
     static final int HISTORY_PAIRS = 10;
     static final int HISTORY_CHARS = 12_000;
     static final int SOURCE_CHARS = 12_000;
+    static final int REFERENCE_CHARS = 12_000;
 
     /**
      * 이전 대화는 완료된 질문·응답 쌍만 보낸다. user/assistant가 번갈아 나와야 하는 모델(Gemma 등)이 있고,
@@ -124,7 +125,33 @@ public class WorkspaceChatService {
                         .append(body).append('\n');
             }
         }
+        appendReferences(sb, row.summary().workId());
         return sb.toString();
+    }
+
+    /** 담당자가 업무에 지정한 사내 자료(attached_references). 현행이 아닌 버전도 지정한 그대로 붙이고 상태를 밝힌다 */
+    private void appendReferences(StringBuilder sb, String workId) {
+        List<String[]> references = jdbc.query("SELECT d.doc_id, d.version, d.title, d.status, COALESCE(d.content, '') "
+                        + "FROM attached_references a JOIN work_cases w ON w.work_id = a.work_id "
+                        + "JOIN documents d ON d.doc_id = a.doc_id AND d.version = a.version AND d.company_id = w.company_id "
+                        + "WHERE a.work_id = ? AND d.indexed ORDER BY a.seq",
+                (rs, i) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)},
+                workId);
+        if (references.isEmpty()) {
+            return;
+        }
+        sb.append("\n[사내 참고 자료] 담당자가 지정한 자료입니다. 상태가 현행이 아니면 그 점을 밝히고 씁니다.\n");
+        int left = REFERENCE_CHARS;
+        for (String[] r : references) {
+            if (left <= 0) {
+                sb.append("(이후 자료는 길이 제한으로 생략)\n");
+                break;
+            }
+            String body = r[4].length() > left ? r[4].substring(0, left) + "\n…(이하 생략)" : r[4];
+            left -= r[4].length();
+            sb.append("### ").append(r[0]).append(' ').append(r[1]).append(' ').append(r[2])
+                    .append(" (").append(r[3]).append(")\n").append(body).append('\n');
+        }
     }
 
     private String registration(WorkRows.Row row) {

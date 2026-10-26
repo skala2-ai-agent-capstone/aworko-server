@@ -10,6 +10,7 @@ import com.aworko.server.work.dto.CreateWorkRequest;
 import com.aworko.server.work.dto.CustomerResponse;
 import com.aworko.server.work.dto.FileUpload;
 import com.aworko.server.work.dto.InternalReference;
+import com.aworko.server.work.dto.RegistrationItem;
 import com.aworko.server.work.dto.SaveArtifactRequest;
 import com.aworko.server.work.dto.SourceDocumentRequest;
 import com.aworko.server.work.dto.SourceDocumentResponse;
@@ -126,7 +127,28 @@ public class WorkspaceService {
                         + " FROM artifact_versions WHERE work_id = ? ORDER BY saved_at DESC, version DESC LIMIT 1",
                 this::artifact, workId).stream().findFirst().orElse(null);
         return new WorkDetail(row.summary(), WorkTypeCatalog.artifactTitle(row.workType()), row.customerId(),
-                row.createdAt(), row.completedAt(), owner, registration, documents, references, artifact);
+                row.createdAt(), row.completedAt(), owner, registration, registrationItems(registration, row.workType()),
+                documents, references, artifact);
+    }
+
+    /** 등록 내용을 화면 이름과 함께 펼친다. 이름을 모르는 key는 key를 그대로 이름으로 쓰고 맨 뒤에 둔다 */
+    static List<RegistrationItem> registrationItems(JsonNode registration, WorkType type) {
+        if (registration == null || !registration.isObject()) {
+            return List.of();
+        }
+        Map<String, String> labels = WorkTypeCatalog.registrationLabels(type);
+        List<RegistrationItem> items = new ArrayList<>();
+        labels.forEach((key, label) -> {
+            if (registration.has(key)) {
+                items.add(new RegistrationItem(key, label, registration.get(key).asText()));
+            }
+        });
+        registration.properties().forEach(e -> {
+            if (!labels.containsKey(e.getKey())) {
+                items.add(new RegistrationItem(e.getKey(), e.getKey(), e.getValue().asText()));
+            }
+        });
+        return items;
     }
 
     /** 업무를 만들고 함께 올린 고객 자료(files)를 저장한다. 고객을 비우면 고객 미지정 */
@@ -319,7 +341,7 @@ public class WorkspaceService {
         }
         Map<String, String> out = new LinkedHashMap<>(request.registration() == null ? Map.of() : request.registration());
         if (!blank(request.purpose())) {
-            out.putIfAbsent("purpose", request.purpose().strip());
+            out.putIfAbsent(WorkTypeCatalog.PURPOSE_KEY, request.purpose().strip());
         }
         return out;
     }

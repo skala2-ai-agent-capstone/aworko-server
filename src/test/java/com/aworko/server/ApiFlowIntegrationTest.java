@@ -13,6 +13,7 @@ import com.aworko.server.organization.UserRole;
 import com.aworko.server.support.FakeLiveRequests;
 import com.aworko.server.support.TestcontainersConfiguration;
 import jakarta.persistence.EntityManager;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -24,6 +25,7 @@ import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -79,6 +81,36 @@ class ApiFlowIntegrationTest {
             assertThat(count("SELECT count(*) FROM evaluations WHERE work_id = 'W-TEST-QT-01'")).isEqualTo(1);
             assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'EVALUATE' "
                     + "AND aggregate_id = 'EVAL-TEST-QT-01-v2'")).isEqualTo(1);
+        }
+
+        @Test
+        void completingAgainIsRejectedWhileTheLatestEvaluationIsActiveOrDone() throws Exception {
+            insertEvaluation("EVAL-OLD", "대기");
+            for (String current : List.of("대기", "코칭 생성 중", "확인 대기", "검토 대기", "확정")) {
+                setStatus("EVAL-OLD", current);
+                complete("v2").andExpect(status().isConflict());
+            }
+            assertThat(count("SELECT count(*) FROM evaluations WHERE work_id = 'W-TEST-QT-01'")).isEqualTo(1);
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'EVALUATE'")).isZero();
+        }
+
+        @Test
+        void completingAgainIsAcceptedAfterFailure() throws Exception {
+            insertEvaluation("EVAL-OLD", "처리 실패");
+            complete("v2").andExpect(status().isAccepted()).andExpect(jsonPath("$.data.created").value(true));
+            // 새 평가가 진행 중이라 이제는 막힌다(같은 버전 재시도는 기존 평가 건을 돌려준다)
+            complete("v2").andExpect(status().isAccepted()).andExpect(jsonPath("$.data.created").value(false));
+        }
+
+        @Test
+        void completingAgainIsAcceptedWhenMaterialsWereOnHold() throws Exception {
+            insertEvaluation("EVAL-OLD", "자료 보류");
+            complete("v2").andExpect(status().isAccepted()).andExpect(jsonPath("$.data.created").value(true));
+        }
+
+        private ResultActions complete(String version) throws Exception {
+            return mvc.perform(auth(post("/api/work-events"), member).contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"task_id\":\"W-TEST-QT-01\",\"deliverable_version\":\"" + version + "\"}"));
         }
 
         @Test
@@ -217,10 +249,13 @@ class ApiFlowIntegrationTest {
             mvc.perform(auth(get("/api/reviews"), lead))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data[0].review_request_id").value("RVQ-1"))
-                    .andExpect(jsonPath("$.data[0].display_status").value("검토 중"));
+                    .andExpect(jsonPath("$.data[0].display_status").value("검토 중"))
+                    .andExpect(jsonPath("$.data[0].work_type_label").value("견적서 작성"))
+                    .andExpect(jsonPath("$.data[0].employee_name").value("가상 직원 A"));
             mvc.perform(auth(get("/api/reviews/RVQ-1"), lead))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.appeal.comment").value("근거 재확인 요청"))
+                    .andExpect(jsonPath("$.data.appeal.submitted_by_name").value("가상 직원 A"))
                     .andExpect(jsonPath("$.data.evaluation.evaluation.evaluation_id").value("EVAL-R1"));
             // 직원이 이의를 제기했고 검토가 배정되면 평가 상세도 열람 가능
             mvc.perform(auth(get("/api/evaluations/EVAL-R1"), lead)).andExpect(status().isOk());
