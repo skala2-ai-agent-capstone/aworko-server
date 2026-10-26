@@ -3,6 +3,9 @@ package com.aworko.server.evaluation;
 import com.aworko.server.global.common.CodedEnum;
 import com.aworko.server.global.common.CodedEnumConverter;
 import jakarta.persistence.Converter;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.Set;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -24,6 +27,10 @@ public enum EvaluationStatus implements CodedEnum {
     CONFIRMED("확정", true),
     FAILED("처리 실패", true),
     ON_HOLD("자료 보류", true);
+
+    /** Agent가 처리 중인 상태(대기 + 진행 4단계). 최종 평가 실행 토큰을 공급하고, 완료 알림을 받으면 확인 대기로 바뀐다 */
+    public static final Set<EvaluationStatus> IN_PROGRESS =
+            Collections.unmodifiableSet(EnumSet.of(WAITING, COLLECTING, EVALUATING, CHECKING_EVIDENCE, COACHING));
 
     private final String code;
     private final boolean serverOnly;

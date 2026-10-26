@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://34.123.201.35:8080",
+      "url": "http://34.172.91.57:8080",
       "description": "ax-eval-gpu 백엔드"
     }
   ],
@@ -361,7 +361,7 @@
           "Review"
         ],
         "summary": "검토 결정",
-        "description": "keep: 기존 결과 유지 → 확정 / override: 수정 요청 → Agent 재평가 후 다시 본인 확인 / hold: 자료 보류. 평가가 '검토 대기'일 때만 가능(그 외 409).",
+        "description": "keep: 기존 결과 유지 → 확정 / override: new_scores(항목별 0~2, 보안 준수는 0·2)를 새 초안으로 반영 → '확인 대기'(직원 본인 확인) / hold: 자료 보류. AI 재평가는 하지 않는다. 평가가 '검토 대기'일 때만 가능(그 외 409). override에 new_scores가 없거나 범위·항목이 틀리면 400.",
         "operationId": "resolve",
         "parameters": [
           {
@@ -499,7 +499,7 @@
           "Evaluation"
         ],
         "summary": "이의 제기",
-        "description": "'확인 대기'일 때만 가능하다. 접수 후 Agent가 근거를 다시 확인하고 담당 팀장에게 검토를 요청한다(202).",
+        "description": "'확인 대기'일 때만 가능하다. 이의 항목(item_id 또는 항목 이름)으로 검토 요청을 만들어 담당 팀장에게 배정하고 바로 '검토 대기'로 바꾼다(202). 평가에 없는 항목이면 400.",
         "operationId": "appeal",
         "parameters": [
           {
@@ -1016,7 +1016,7 @@
           },
           "work_type": {
             "type": "string",
-            "description": "rfp | proposal | quote | reply (또는 rfp_analysis | inquiry_reply). 비우면 평가 때 분류",
+            "description": "rfp | proposal | quote | reply (또는 rfp_analysis | inquiry_reply). 평가 기준이 유형별로 정해지므로 필수",
             "example": "rfp"
           },
           "purpose": {
@@ -1038,7 +1038,8 @@
           }
         },
         "required": [
-          "title"
+          "title",
+          "work_type"
         ]
       },
       "ApiResponseWorkDetail": {
@@ -1309,8 +1310,9 @@
           },
           "work_type": {
             "type": "string",
-            "description": "rfp_analysis | proposal | quote | inquiry_reply 또는 프론트 키 rfp | reply. 비우면 평가 때 분류",
-            "example": "rfp"
+            "description": "rfp_analysis | proposal | quote | inquiry_reply 또는 프론트 키 rfp | reply. 평가 기준이 유형별로 정해지므로 필수",
+            "example": "rfp",
+            "minLength": 1
           },
           "customer_id": {
             "type": "string",
@@ -1334,7 +1336,8 @@
           }
         },
         "required": [
-          "title"
+          "title",
+          "work_type"
         ]
       },
       "SourceDocumentForm": {
@@ -1572,7 +1575,7 @@
         "properties": {
           "decision": {
             "type": "string",
-            "description": "keep(유지 → 확정) | override(수정 → 재평가) | hold(보류)",
+            "description": "keep(유지 → 확정) | override(팀장 점수 반영 → 확인 대기) | hold(보류)",
             "enum": [
               "keep",
               "override",
@@ -1582,7 +1585,7 @@
           },
           "note": {
             "type": "string",
-            "description": "검토 의견",
+            "description": "검토 의견. override면 고친 항목의 사유로도 남는다",
             "example": "원문 근거 확인, 기존 점수 유지",
             "maxLength": 2000,
             "minLength": 0
@@ -1592,9 +1595,9 @@
             "additionalProperties": {
               "type": "integer",
               "format": "int32",
-              "description": "override일 때 항목별 요청 점수(선택). 예: {\"quote.3\": 2}"
+              "description": "override일 때 필수. 항목별 새 점수(0~2, 보안 준수는 0·2). 예: {\"quote.3\": 2}"
             },
-            "description": "override일 때 항목별 요청 점수(선택). 예: {\"quote.3\": 2}"
+            "description": "override일 때 필수. 항목별 새 점수(0~2, 보안 준수는 0·2). 예: {\"quote.3\": 2}"
           }
         },
         "required": [
@@ -1656,25 +1659,6 @@
           }
         }
       },
-      "Item": {
-        "properties": {
-          "label": {
-            "type": "string",
-            "description": "평가 기준 항목 이름. 기준이 없으면 잘한 점·보완할 점·확인 필요",
-            "example": "결과 검증"
-          },
-          "state": {
-            "type": "string",
-            "description": "good(양호) | warn(보완 필요) | pending(확인 필요)",
-            "example": "warn"
-          },
-          "note": {
-            "type": "string",
-            "description": "진단",
-            "example": "AI 결과를 참조 자료와 아직 대조하지 않았어요."
-          }
-        }
-      },
       "LiveEvaluationResponse": {
         "properties": {
           "live_eval_id": {
@@ -1731,7 +1715,7 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Item"
+              "$ref": "#/components/schemas/LiveFeedbackItem"
             }
           },
           "coaching": {
@@ -1742,6 +1726,25 @@
           "suggested_prompt": {
             "type": "string",
             "description": "그대로 보내 볼 수 있는 추천 프롬프트"
+          }
+        }
+      },
+      "LiveFeedbackItem": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "평가 기준 항목 이름. 기준이 없으면 잘한 점·보완할 점·확인 필요",
+            "example": "결과 검증"
+          },
+          "state": {
+            "type": "string",
+            "description": "good(양호) | warn(보완 필요) | pending(확인 필요)",
+            "example": "warn"
+          },
+          "note": {
+            "type": "string",
+            "description": "진단",
+            "example": "AI 결과를 참조 자료와 아직 대조하지 않았어요."
           }
         }
       },
@@ -2351,7 +2354,63 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Item"
+              "$ref": "#/components/schemas/RubricItem"
+            }
+          }
+        }
+      },
+      "RubricItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "example": "q.1"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "item": {
+            "type": "string",
+            "example": "문제 정의"
+          },
+          "criterion": {
+            "type": "string",
+            "description": "평가 질문"
+          },
+          "score2": {
+            "type": "string",
+            "description": "2점 기준"
+          },
+          "score1": {
+            "type": "string",
+            "description": "1점 기준(없을 수 있음)"
+          },
+          "score0": {
+            "type": "string",
+            "description": "0점 기준"
+          },
+          "unobserved": {
+            "type": "string",
+            "description": "미관측 조건"
+          },
+          "needs_review": {
+            "type": "string",
+            "description": "검토 필요 조건"
+          },
+          "evidence_sources": {
+            "type": "array",
+            "description": "근거로 볼 자료",
+            "items": {
+              "type": "string",
+              "description": "근거로 볼 자료"
+            }
+          },
+          "related_clauses": {
+            "type": "array",
+            "description": "관련 조항",
+            "items": {
+              "type": "string",
+              "description": "관련 조항"
             }
           }
         }
@@ -2508,6 +2567,21 @@
           }
         }
       },
+      "Coaching": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "강점 | 보완점 | 기록 안내"
+          },
+          "text": {
+            "type": "string"
+          },
+          "target_span_id": {
+            "type": "string",
+            "description": "개선 대상 산출물 구간"
+          }
+        }
+      },
       "EvaluationDetail": {
         "properties": {
           "evaluation": {
@@ -2577,7 +2651,50 @@
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Item"
+              "$ref": "#/components/schemas/EvaluationReportItem"
+            }
+          }
+        }
+      },
+      "EvaluationReportItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "example": "quote.3"
+          },
+          "name": {
+            "type": "string",
+            "example": "결과 검증"
+          },
+          "status": {
+            "type": "string",
+            "description": "채점 | 미관측 | 검토 필요"
+          },
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0·1·2. 미관측·검토 필요면 null"
+          },
+          "score_label": {
+            "type": "string",
+            "example": "2점"
+          },
+          "reason": {
+            "type": "string",
+            "description": "판단 이유"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "description": "근거 ID (대화·산출물 구간·문서 조항)",
+            "items": {
+              "type": "string",
+              "description": "근거 ID (대화·산출물 구간·문서 조항)"
+            }
+          },
+          "coaching": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Coaching"
             }
           }
         }

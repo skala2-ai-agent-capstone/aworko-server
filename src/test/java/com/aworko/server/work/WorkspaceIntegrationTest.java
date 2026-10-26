@@ -157,18 +157,21 @@ class WorkspaceIntegrationTest {
     }
 
     @Test
-    void createRejectsUnknownTypeCustomerAndRegistrationKey() throws Exception {
+    void createRejectsMissingOrUnknownTypeCustomerAndRegistrationKey() throws Exception {
         create("{\"title\":\"x\",\"work_type\":\"memo\",\"customer_id\":\"CU-01\"}").andExpect(status().isBadRequest());
-        create("{\"title\":\"x\",\"customer_id\":\"CU-NOPE\"}").andExpect(status().isNotFound());
-        create("{\"title\":\"x\",\"customer_id\":\"CU-01\",\"registration\":{\"Bad-Key\":\"v\"}}")
+        create("{\"title\":\"x\",\"work_type\":\"quote\",\"customer_id\":\"CU-NOPE\"}").andExpect(status().isNotFound());
+        create("{\"title\":\"x\",\"work_type\":\"quote\",\"customer_id\":\"CU-01\",\"registration\":{\"Bad-Key\":\"v\"}}")
                 .andExpect(status().isBadRequest());
-        create("{\"customer_id\":\"CU-01\"}").andExpect(status().isBadRequest());
-        // 유형 없이도 만들 수 있다(평가 때 분류). 등록 기록이 없으면 registration은 생략된다
-        String body = create("{\"title\":\"유형 미정\",\"customer_id\":\"CU-01\"}").andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.summary.work_type").doesNotExist())
-                .andExpect(jsonPath("$.data.registration").doesNotExist())
-                .andReturn().getResponse().getContentAsString();
-        assertThat(body).contains("\"artifact_title\":\"산출물\"");
+        create("{\"work_type\":\"quote\",\"customer_id\":\"CU-01\"}").andExpect(status().isBadRequest());
+        // 업무 유형은 필수다(자동 분류 없음). JSON·multipart 모두 막는다
+        create("{\"title\":\"유형 미정\",\"customer_id\":\"CU-01\"}").andExpect(status().isBadRequest());
+        create("{\"title\":\"유형 미정\",\"work_type\":\" \"}").andExpect(status().isBadRequest());
+        mvc.perform(auth(multipart("/api/works"), member).param("title", "유형 미정"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.message").value("업무 유형(work_type)을 골라 주세요"));
+        // 등록 기록이 없으면 registration은 생략된다
+        create("{\"title\":\"등록 없음\",\"work_type\":\"quote\",\"customer_id\":\"CU-01\"}").andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.registration").doesNotExist());
     }
 
     @Test

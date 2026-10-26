@@ -3,6 +3,11 @@ spring:
     name: aworko-server
   profiles:
     default: local
+  task:
+    scheduling:
+      pool:
+        # 아웃박스 릴레이·실행 토큰 공급(MCP 호출)·생성 상태 확인이 서로를 막지 않게 한다
+        size: 3
   jackson:
     time-zone: Asia/Seoul
     default-property-inclusion: non_null
@@ -72,6 +77,11 @@ app:
     # MCP의 INTERNAL_API_KEY와 같은 값. 운영(prod)에는 기본값이 없어서 없으면 기동하지 않는다
     internal-key: ${INTERNAL_API_KEY:}
     timeout: 5s
+    # 내규 올리기(/internal/documents)는 PDF 분할·임베딩을 기다려야 해서 읽기 제한을 따로 둔다
+    document-timeout: 120s
+  rubric-generation:
+    # 평가 기준 초안 생성이 이만큼 '대기'면 Worker가 없거나 멈춘 것으로 보고 실패(TIMED_OUT)로 보인다
+    stale-after: 30m
   llm:
     # 업무 공간 대화. llm-proxy를 거쳐야 대화가 llm_exchanges(→ messages 뷰)에 기록된다
     base-url: ${LLM_PROXY_URL:http://localhost:4000}
@@ -83,6 +93,24 @@ app:
   live-evaluation:
     # 실시간 피드백 요청 간격(사용자별)
     min-interval: 5m
+  final-worker:
+    # 최종 평가 Worker(--token-file)가 읽는 평가별 실행 토큰 파일. 비우면 공급하지 않는다.
+    # 운영은 Worker와 같은 볼륨의 경로(예: /app/run-tokens/final-tokens.json)를 FINAL_TOKEN_FILE로 준다
+    token-file: ${FINAL_TOKEN_FILE:}
+    # MCP /internal/runs 토큰 수명. 남은 수명이 refresh-before보다 짧아지면 다시 발급한다(스냅샷도 새로 고정)
+    token-ttl: 2h
+    refresh-before: 30m
+    poll-interval: 3s
+  team-worker:
+    # 팀 평가 Worker(--token-file)가 읽는 요청별 실행 토큰 파일(TEAM_TOKEN_FILE). 비우면 공급하지 않는다
+    token-file: ${TEAM_TOKEN_FILE:}
+    # MCP /internal/team-runs 토큰 수명. 팀 토큰은 다시 발급해도 스냅샷이 그대로다
+    token-ttl: 2h
+    refresh-before: 30m
+    poll-interval: 3s
+  team-evaluation:
+    # 팀 평가 요청이 이만큼 리포트 없이 대기면 Worker가 없거나 멈춘 것으로 보고 실패(TIMED_OUT)로 보이고 토큰도 끊는다
+    stale-after: 30m
   messaging:
     outbox:
       enabled: ${OUTBOX_RELAY_ENABLED:true}
@@ -90,6 +118,7 @@ app:
       batch-size: 50
       confirm-timeout: 5s
     # 재시도 큐에서 머무는 시간. 지나면 요청 큐로 돌아간다 (큐 인자라 바꾸면 큐를 다시 만들어야 한다)
+    # 평가 기준 생성(rubric_generation.retry)도 evaluation-retry-delay를 쓴다
     evaluation-retry-delay: 30s
     live-evaluation-retry-delay: 5s
 

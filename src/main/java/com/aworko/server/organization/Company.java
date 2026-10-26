@@ -9,7 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import org.hibernate.annotations.Immutable;
 
-/** 회사(테넌트). 기준 데이터는 MCP 적재기가 넣으므로 백엔드는 읽기만 한다. */
+/** 회사(테넌트). 기준 데이터는 MCP 적재기가 넣는다. 회원 가입 때 없는 회사·팀은 백엔드가 JdbcTemplate으로 만든다. */
 @Entity
 @Immutable
 @Table(name = "companies")

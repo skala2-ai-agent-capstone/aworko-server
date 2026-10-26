@@ -1,6 +1,7 @@
 package com.aworko.server.evaluation;
 
 import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_CONFIRMATION;
+import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_REVIEW;
 import static com.aworko.server.evaluation.EvaluationStatus.CONFIRMED;
 import static com.aworko.server.evaluation.EvaluationStatus.FAILED;
 import static com.aworko.server.evaluation.EvaluationStatus.ON_HOLD;
@@ -34,7 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * 평가 조회와 사람의 행동(본인 확인·이의 제기·재처리). 확정 등 서버 전용 상태는 여기서만 바꾼다.
- * 행동마다 human_actions에 기록하고(business-mcp가 읽음), 멈춘 Agent 실행을 RESUME 메시지로 깨운다.
+ * 행동마다 human_actions에 기록한다(business-mcp가 읽음). 사람의 행동은 Agent에 메시지로 보내지 않고
+ * 이 트랜잭션에서 상태 전환까지 끝낸다(Agent는 EVALUATE만 받는다, ai-agent-capstone docs/backend_worker_alignment.md 3절).
  */
 @Service
 @RequiredArgsConstructor
@@ -49,6 +51,7 @@ public class EvaluationService {
     private final HumanActionRepository humanActionRepository;
     private final EvaluationFailureRepository failureRepository;
     private final OutboxPublisher outboxPublisher;
+    private final ReviewRecords reviewRecords;
     private final EvaluationAccess access;
     private final ObjectMapper objectMapper;
 
@@ -92,12 +95,11 @@ public class EvaluationService {
         access.requireOwner(me, work);
         evaluation.transition(Set.of(AWAITING_CONFIRMATION), CONFIRMED);
         record(work, me, HumanActionType.CONFIRM, evaluation, payload(evaluation));
-        outboxPublisher.resume(evaluationId, HumanActionType.CONFIRM.getCode());
         return StatusResponse.of(evaluation);
     }
 
     /**
-     * 이의 제기: 확인 대기에서만 가능. 상태는 Agent가 근거를 다시 보고 request_review로 '검토 대기'로 바꾼다.
+     * 이의 제기: 확인 대기에서만 가능. 이의 항목으로 검토 요청을 만들어 담당 팀장에게 배정하고 '검토 대기'로 바꾼다.
      */
     @Transactional
     public StatusResponse appeal(AuthPrincipal me, String evaluationId, AppealRequest request) {
@@ -107,13 +109,16 @@ public class EvaluationService {
         if (evaluation.getStatus() != AWAITING_CONFIRMATION) {
             throw new BusinessException(ErrorCode.CONFLICT, "이의 제기는 '확인 대기' 상태에서만 할 수 있습니다");
         }
+        String reviewRequestId = reviewRecords.createAppealReview(evaluation, work, request.targetItems(),
+                request.citedEvidence());
+        evaluation.transition(Set.of(AWAITING_CONFIRMATION), AWAITING_REVIEW);
         ObjectNode payload = payload(evaluation);
         payload.set("target_items", objectMapper.valueToTree(request.targetItems()));
         payload.set("cited_evidence", objectMapper.valueToTree(
                 request.citedEvidence() == null ? List.of() : request.citedEvidence()));
         payload.put("comment", request.comment());
+        payload.put("review_request_id", reviewRequestId);
         record(work, me, HumanActionType.APPEAL, evaluation, payload);
-        outboxPublisher.resume(evaluationId, HumanActionType.APPEAL.getCode());
         return StatusResponse.of(evaluation);
     }
 

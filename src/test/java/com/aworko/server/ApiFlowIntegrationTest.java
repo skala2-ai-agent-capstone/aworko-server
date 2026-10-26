@@ -133,7 +133,7 @@ class ApiFlowIntegrationTest {
         }
 
         @Test
-        void confirmMovesToConfirmedOnceRecordsActionAndQueuesResume() throws Exception {
+        void confirmMovesToConfirmedOnceRecordsActionWithoutQueueMessage() throws Exception {
             mvc.perform(auth(post("/api/evaluations/EVAL-F1/confirm"), member))
                     .andExpect(status().isOk())
                     .andExpect(jsonPath("$.data.status").value("확정"));
@@ -142,22 +142,46 @@ class ApiFlowIntegrationTest {
 
             assertThat(count("SELECT count(*) FROM human_actions WHERE action = 'confirm' "
                     + "AND payload->>'evaluation_id' = 'EVAL-F1'")).isEqualTo(1);
-            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'RESUME' AND aggregate_id = 'EVAL-F1' "
-                    + "AND payload->>'action' = 'confirm'")).isEqualTo(1);
+            // 확정은 백엔드에서 끝난다. Agent 큐로 보내는 메시지(RESUME)는 없다
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE aggregate_id = 'EVAL-F1'")).isZero();
         }
 
         @Test
-        void appealIsRecordedAndStatusStaysUntilAgentRequestsReview() throws Exception {
-            mvc.perform(auth(post("/api/evaluations/EVAL-F1/appeals"), member).contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"target_items\":[\"q.3\"],\"comment\":\"검토 기록이 있습니다\"}"))
-                    .andExpect(status().isAccepted())
-                    .andExpect(jsonPath("$.data.status").value("확인 대기"));
-
-            assertThat(jdbc.queryForObject("SELECT payload->>'comment' FROM human_actions WHERE action = 'appeal' "
-                    + "AND payload->>'evaluation_id' = 'EVAL-F1'", String.class)).isEqualTo("검토 기록이 있습니다");
+        void appealCreatesReviewForTeamLeadAndAwaitsReview() throws Exception {
             mvc.perform(auth(post("/api/evaluations/EVAL-F1/appeals"), member).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"target_items\":[],\"comment\":\"\"}"))
                     .andExpect(status().isBadRequest());
+            // 항목 이름으로 골라도 item_id로 바꿔 저장한다
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/appeals"), member).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"target_items\":[\"결과 검증\"],\"comment\":\"검토 기록이 있습니다\","
+                                    + "\"cited_evidence\":[\"W:M-1\"]}"))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.status").value("검토 대기"));
+
+            assertThat(jdbc.queryForMap("SELECT target_items::text AS targets, reviewer_id, reason, "
+                    + "review_memo->'cited_evidence'->>0 AS cited FROM review_requests WHERE evaluation_id = 'EVAL-F1'"))
+                    .containsEntry("targets", "[\"q.3\"]").containsEntry("reviewer_id", "L-3001")
+                    .containsEntry("reason", "직원 이의 제기").containsEntry("cited", "W:M-1");
+            entityManager.flush();   // human_actions는 JPA로 저장된다. 아래 JDBC 조회 전에 반영
+            assertThat(jdbc.queryForObject("SELECT payload->>'comment' FROM human_actions WHERE action = 'appeal' "
+                    + "AND payload->>'evaluation_id' = 'EVAL-F1'", String.class)).isEqualTo("검토 기록이 있습니다");
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE aggregate_id = 'EVAL-F1'")).isZero();
+            // 담당 팀장 목록에 바로 보이고, 같은 평가에 다시 이의를 걸 수는 없다
+            mvc.perform(auth(get("/api/reviews"), lead))
+                    .andExpect(jsonPath("$.data[?(@.evaluation_id == 'EVAL-F1')].display_status").value("검토 중"));
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/appeals"), member).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"target_items\":[\"q.3\"],\"comment\":\"한 번 더\"}"))
+                    .andExpect(status().isConflict());
+        }
+
+        @Test
+        void appealOnUnknownItemIsRejectedAndStatusStays() throws Exception {
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/appeals"), member).contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"target_items\":[\"q.9\"],\"comment\":\"없는 항목\"}"))
+                    .andExpect(status().isBadRequest());
+            mvc.perform(auth(get("/api/evaluations/EVAL-F1"), member))
+                    .andExpect(jsonPath("$.data.evaluation.display_status").value("확인 대기"));
+            assertThat(count("SELECT count(*) FROM review_requests WHERE evaluation_id = 'EVAL-F1'")).isZero();
         }
 
         @Test
@@ -229,7 +253,11 @@ class ApiFlowIntegrationTest {
         }
 
         @Test
-        void keepConfirmsOverrideRequeuesHoldParks() throws Exception {
+        void keepConfirmsOverrideAppliesLeadScoresHoldParks() throws Exception {
+            jdbc.update("INSERT INTO evaluation_drafts (evaluation_id, revision, items) VALUES ('EVAL-R1', 1, ?::jsonb)",
+                    "[{\"item_id\":\"q.1\",\"item\":\"문제 정의\",\"status\":\"채점\",\"score\":2,\"evidence_ids\":[\"W:M-1\"]},"
+                            + "{\"item_id\":\"q.3\",\"item\":\"결과 검증\",\"status\":\"미관측\",\"score\":null,"
+                            + "\"reason\":\"대조 기록 없음\"}]");
             mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), lead).contentType(MediaType.APPLICATION_JSON)
                             .content("{\"decision\":\"keep\",\"note\":\"근거 확인\"}"))
                     .andExpect(status().isOk())
@@ -237,14 +265,36 @@ class ApiFlowIntegrationTest {
             mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), lead).contentType(MediaType.APPLICATION_JSON)
                     .content("{\"decision\":\"keep\"}")).andExpect(status().isConflict());
 
+            // 수정 요청: 점수가 없거나, 범위 밖이거나, 없는 항목이면 거절하고 초안은 그대로다
             setStatus("EVAL-R1", "검토 대기");
+            for (String bad : new String[]{"{\"decision\":\"override\"}",
+                    "{\"decision\":\"override\",\"new_scores\":{\"q.3\":3}}",
+                    "{\"decision\":\"override\",\"new_scores\":{\"q.9\":1}}"}) {
+                mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), lead).contentType(MediaType.APPLICATION_JSON)
+                        .content(bad)).andExpect(status().isBadRequest());
+            }
+            assertThat(count("SELECT count(*) FROM evaluation_drafts WHERE evaluation_id = 'EVAL-R1'")).isEqualTo(1);
+
+            // 팀장 점수를 새 초안 판으로 반영하고 직원 본인 확인(확인 대기)으로 돌린다. AI 재평가 메시지는 없다
             mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), lead).contentType(MediaType.APPLICATION_JSON)
-                            .content("{\"decision\":\"override\",\"new_scores\":{\"q.3\":2}}"))
-                    .andExpect(jsonPath("$.data.status").value("대기"));
-            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'RESUME' "
-                    + "AND payload->>'action' = 'review_decision'")).isEqualTo(1);
+                            .content("{\"decision\":\"override\",\"note\":\"승인 요청 기록 확인\",\"new_scores\":{\"q.3\":2}}"))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.data.status").value("확인 대기"));
+            assertThat(jdbc.queryForMap("SELECT items->1->>'status' AS status, items->1->>'score' AS score, "
+                            + "items->1->>'reason' AS reason, items->1->'review_override'->>'reviewer_id' AS reviewer, "
+                            + "items->1->'review_override'->'previous'->>'status' AS previous, "
+                            + "items->0->>'score' AS untouched FROM evaluation_drafts "
+                            + "WHERE evaluation_id = 'EVAL-R1' AND revision = 2"))
+                    .containsEntry("status", "채점").containsEntry("score", "2")
+                    .containsEntry("reason", "승인 요청 기록 확인").containsEntry("reviewer", "L-3001")
+                    .containsEntry("previous", "미관측").containsEntry("untouched", "2");
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE aggregate_id = 'EVAL-R1'")).isZero();
+            entityManager.flush();   // human_actions는 JPA로 저장된다. 아래 JDBC 조회 전에 반영
             assertThat(count("SELECT count(*) FROM human_actions WHERE action = 'review_decision' "
-                    + "AND payload->'new_scores'->>'q.3' = '2'")).isEqualTo(1);
+                    + "AND payload->'new_scores'->>'q.3' = '2' AND payload->>'draft_revision' = '2'")).isEqualTo(1);
+            mvc.perform(auth(get("/api/evaluations/EVAL-R1"), member))
+                    .andExpect(jsonPath("$.data.draft_revision").value(2))
+                    .andExpect(jsonPath("$.data.report.total_score").value(4));
 
             setStatus("EVAL-R1", "검토 대기");
             mvc.perform(auth(post("/api/reviews/RVQ-1/resolve"), lead).contentType(MediaType.APPLICATION_JSON)

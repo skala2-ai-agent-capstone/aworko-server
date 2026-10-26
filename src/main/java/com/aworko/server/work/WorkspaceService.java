@@ -133,6 +133,10 @@ public class WorkspaceService {
     @Transactional
     public WorkDetail create(AuthPrincipal me, CreateWorkRequest request, List<FileUpload> files) {
         WorkType type = parseWorkType(request.workType());
+        if (type == null) {
+            // multipart는 Bean Validation을 거치지 않으므로 여기서도 막는다
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "업무 유형(work_type)을 골라 주세요");
+        }
         String customerId = blank(request.customerId()) ? null : request.customerId().strip();
         if (customerId != null) {
             Integer customers = jdbc.queryForObject("SELECT count(*) FROM customers WHERE customer_id = ? AND company_id = ?",
@@ -142,7 +146,7 @@ public class WorkspaceService {
             }
         }
         String workId = "W-" + newId();
-        Object[] head = {workId, me.companyId(), me.teamId(), me.userId(), type == null ? null : type.getCode(),
+        Object[] head = {workId, me.companyId(), me.teamId(), me.userId(), type.getCode(),
                 customerId, request.title().strip()};
         String registration = registrationJson(registrationOf(request));
         if (registration == null) {

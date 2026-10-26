@@ -13,6 +13,7 @@ public record EvaluationReport(
         @Schema(description = "평가 가능 비율(%) = 채점 항목 ÷ 전체 항목", example = "80") int observedRate,
         List<Item> items) {
 
+    @Schema(name = "EvaluationReportItem")
     public record Item(
             @Schema(example = "quote.3") String itemId,
             @Schema(example = "결과 검증") String name,

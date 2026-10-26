@@ -31,7 +31,7 @@ public class OutboxEvent {
     @Column(name = "aggregate_id", nullable = false)
     private String aggregateId;
 
-    /** EVALUATE / RESUME */
+    /** MessageType 이름. 예전 RESUME 행은 V5에서 DISCARDED로 정리했다 */
     @Column(nullable = false)
     private String type;
 

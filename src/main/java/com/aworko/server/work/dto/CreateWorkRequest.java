@@ -7,8 +7,9 @@ import java.util.Map;
 
 public record CreateWorkRequest(
         @Schema(description = "업무명", example = "카카오엔터프라이즈향 RFP 분석") @NotBlank @Size(max = 200) String title,
-        @Schema(description = "rfp_analysis | proposal | quote | inquiry_reply 또는 프론트 키 rfp | reply. 비우면 평가 때 분류",
-                example = "rfp") String workType,
+        @Schema(description = "rfp_analysis | proposal | quote | inquiry_reply 또는 프론트 키 rfp | reply. "
+                + "평가 기준이 유형별로 정해지므로 필수",
+                example = "rfp", requiredMode = Schema.RequiredMode.REQUIRED) @NotBlank String workType,
         @Schema(description = "고객 ID(GET /api/customers). 비우면 고객 미지정", example = "CU-HANBIT-PHARMA") String customerId,
         @Schema(description = "「목적·요구사항」 한 칸. registration.purpose로 저장된다", example = "목적: SI 제안 사전 분석")
         @Size(max = 4000) String purpose,

@@ -6,6 +6,7 @@ import java.util.List;
 public record RubricDetail(RubricSummary rubric, List<Item> items) {
 
     /** rubric_items 한 줄. score_1이 없으면 0·2점만 있는 항목 */
+    @Schema(name = "RubricItem")
     public record Item(
             @Schema(example = "q.1") String itemId,
             int seq,

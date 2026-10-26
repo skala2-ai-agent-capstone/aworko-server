@@ -1,5 +1,6 @@
 package com.aworko.server;
 
+import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -32,5 +33,28 @@ class OpenApiDocsTest {
                 .andExpect(jsonPath("$.paths['/api/works'].post.requestBody.content['multipart/form-data']").exists())
                 .andExpect(jsonPath("$.paths['/api/works'].post.requestBody.content['application/json']").exists())
                 .andExpect(jsonPath("$.paths['/api/works'].post.parameters").doesNotExist());
+    }
+
+    /** 이름이 같은 중첩 record(Item)가 하나의 스키마로 합쳐지지 않는지 */
+    @Test
+    void nestedItemRecordsKeepTheirOwnSchemas() throws Exception {
+        mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.schemas.Item").doesNotExist())
+                .andExpect(jsonPath("$.components.schemas.LiveFeedbackDisplay.properties.items.items['$ref']")
+                        .value("#/components/schemas/LiveFeedbackItem"))
+                .andExpect(jsonPath("$.components.schemas.EvaluationReport.properties.items.items['$ref']")
+                        .value("#/components/schemas/EvaluationReportItem"))
+                .andExpect(jsonPath("$.components.schemas.RubricDetail.properties.items.items['$ref']")
+                        .value("#/components/schemas/RubricItem"))
+                .andExpect(jsonPath("$.components.schemas.LiveFeedbackItem.properties.state").exists())
+                .andExpect(jsonPath("$.components.schemas.EvaluationReportItem.properties.score").exists())
+                .andExpect(jsonPath("$.components.schemas.RubricItem.properties.criterion").exists());
+    }
+
+    @Test
+    void workTypeIsRequiredWhenCreatingAWork() throws Exception {
+        mvc.perform(get("/v3/api-docs")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.components.schemas.CreateWorkRequest.required", hasItem("work_type")))
+                .andExpect(jsonPath("$.components.schemas.CreateWorkForm.required", hasItem("work_type")));
     }
 }

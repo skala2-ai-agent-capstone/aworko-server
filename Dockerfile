@@ -10,7 +10,9 @@ RUN ./gradlew bootJar --no-daemon -q && cp build/libs/*.jar /src/app.jar
 
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-RUN useradd --system --uid 10001 app
+# run-tokens: 최종 평가 Worker와 함께 쓰는 실행 토큰 볼륨 자리. 이미지에 app 소유로 만들어 두어야
+# 새 이름 있는 볼륨이 이 소유권을 이어받는다(Worker도 같은 uid 10001)
+RUN useradd --system --uid 10001 app && mkdir -p /app/run-tokens && chown app /app/run-tokens
 COPY --from=build /src/app.jar app.jar
 USER app
 

@@ -10,6 +10,7 @@ public record LiveFeedbackDisplay(
         String coaching,
         @Schema(description = "그대로 보내 볼 수 있는 추천 프롬프트") String suggestedPrompt) {
 
+    @Schema(name = "LiveFeedbackItem")
     public record Item(
             @Schema(description = "평가 기준 항목 이름. 기준이 없으면 잘한 점·보완할 점·확인 필요", example = "결과 검증") String label,
             @Schema(description = "good(양호) | warn(보완 필요) | pending(확인 필요)", example = "warn") String state,

@@ -52,7 +52,8 @@ public class EvaluationController {
     }
 
     @Operation(summary = "이의 제기",
-            description = "'확인 대기'일 때만 가능하다. 접수 후 Agent가 근거를 다시 확인하고 담당 팀장에게 검토를 요청한다(202).")
+            description = "'확인 대기'일 때만 가능하다. 이의 항목(item_id 또는 항목 이름)으로 검토 요청을 만들어 담당 팀장에게 배정하고 "
+                    + "바로 '검토 대기'로 바꾼다(202). 평가에 없는 항목이면 400.")
     @PostMapping("/{evaluationId}/appeals")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<StatusResponse> appeal(@AuthenticationPrincipal AuthPrincipal me,
