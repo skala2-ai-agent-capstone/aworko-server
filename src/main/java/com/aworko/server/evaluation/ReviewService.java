@@ -1,9 +1,9 @@
 package com.aworko.server.evaluation;
 
+import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_CONFIRMATION;
 import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_REVIEW;
 import static com.aworko.server.evaluation.EvaluationStatus.CONFIRMED;
 import static com.aworko.server.evaluation.EvaluationStatus.ON_HOLD;
-import static com.aworko.server.evaluation.EvaluationStatus.WAITING;
 
 import com.aworko.server.evaluation.dto.ResolveReviewRequest;
 import com.aworko.server.evaluation.dto.ReviewDetail;
@@ -15,7 +15,6 @@ import com.aworko.server.global.security.AuthPrincipal;
 import com.aworko.server.humanaction.HumanAction;
 import com.aworko.server.humanaction.HumanActionRepository;
 import com.aworko.server.humanaction.HumanActionType;
-import com.aworko.server.messaging.OutboxPublisher;
 import com.aworko.server.organization.UserRole;
 import com.aworko.server.work.WorkCase;
 import com.aworko.server.work.WorkCaseRepository;
@@ -30,8 +29,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 팀장(검토자)의 검토. 이의 제기나 채점 불일치로 Agent가 request_review를 하면 business-mcp가 담당 팀장을 배정한다.
- * keep → 확정, override → 재평가(RESUME review_decision), hold → 자료 보류.
+ * 팀장(검토자)의 검토. 직원이 이의를 제기하면 백엔드가 검토 요청을 만들어 담당 팀장에게 배정한다(EvaluationService.appeal).
+ * 팀장은 직원이 이의를 제기한 평가의 검토만 목록·상세·결정할 수 있다 (EvaluationAccess.hasEmployeeAppeal).
+ * keep → 확정, override → 팀장 점수를 새 초안으로 반영하고 확인 대기(직원 본인 확인), hold → 자료 보류.
+ * Agent는 검토 결정을 읽지 않으므로 override도 AI 재평가를 보내지 않는다.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,7 +44,7 @@ public class ReviewService {
     private final HumanActionRepository humanActionRepository;
     private final EvaluationService evaluationService;
     private final EvaluationAccess access;
-    private final OutboxPublisher outboxPublisher;
+    private final ReviewRecords reviewRecords;
     private final ObjectMapper objectMapper;
 
     @Transactional(readOnly = true)
@@ -51,7 +52,10 @@ public class ReviewService {
         requireTeamLead(me);
         return reviewRequestRepository.findByReviewerIdOrderByCreatedAtDesc(me.userId()).stream()
                 .flatMap(r -> evaluationRepository.findByEvaluationIdAndCompanyId(r.getEvaluationId(), me.companyId())
-                        .map(e -> summary(r, e, workCaseRepository.findById(e.getWorkId()).orElse(null))).stream())
+                        .flatMap(e -> workCaseRepository.findById(e.getWorkId())
+                                .filter(w -> access.hasEmployeeAppeal(w, e.getEvaluationId()))
+                                .map(w -> summary(r, e, w)))
+                        .stream())
                 .toList();
     }
 
@@ -60,7 +64,7 @@ public class ReviewService {
         ReviewRequest review = assigned(me, reviewRequestId);
         Evaluation evaluation = evaluationService.find(me, review.getEvaluationId());
         WorkCase work = access.workOf(evaluation);
-        access.requireTeamLead(me, work);
+        access.requireAppealReviewer(me, work, evaluation.getEvaluationId());
         return new ReviewDetail(review.getReviewRequestId(), review.getTargetItems(), review.getReason(),
                 review.getReviewMemo(), latestAppeal(work, evaluation).orElse(null),
                 evaluationService.buildDetail(evaluation, work));
@@ -71,13 +75,26 @@ public class ReviewService {
         ReviewRequest review = assigned(me, reviewRequestId);
         Evaluation evaluation = evaluationService.lock(me, review.getEvaluationId());
         WorkCase work = access.workOf(evaluation);
-        access.requireTeamLead(me, work);
+        access.requireAppealReviewer(me, work, evaluation.getEvaluationId());
 
         EvaluationStatus next = switch (request.decision()) {
             case keep -> CONFIRMED;
-            case override -> WAITING;
+            case override -> AWAITING_CONFIRMATION;
             case hold -> ON_HOLD;
         };
+        // 초안을 쓰기 전에 상태부터 확인한다(이미 결정된 검토에 새 초안이 생기지 않게)
+        if (evaluation.getStatus() != AWAITING_REVIEW) {
+            throw new BusinessException(ErrorCode.CONFLICT,
+                    "현재 상태(" + evaluation.getStatus().getCode() + ")에서는 처리할 수 없습니다");
+        }
+        Integer draftRevision = null;
+        if (request.decision() == ResolveReviewRequest.Decision.override) {
+            if (request.newScores() == null || request.newScores().isEmpty()) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "수정 요청에는 항목별 점수(new_scores)가 필요합니다");
+            }
+            draftRevision = reviewRecords.saveReviewerDraft(evaluation, request.newScores(), reviewRequestId,
+                    me.userId(), request.note());
+        }
         evaluation.transition(Set.of(AWAITING_REVIEW), next);
 
         ObjectNode payload = evaluationService.payload(evaluation);
@@ -87,10 +104,10 @@ public class ReviewService {
         if (request.newScores() != null) {
             payload.set("new_scores", objectMapper.valueToTree(request.newScores()));
         }
-        evaluationService.record(work, me, HumanActionType.REVIEW_DECISION, evaluation, payload);
-        if (request.decision() == ResolveReviewRequest.Decision.override) {
-            outboxPublisher.resume(evaluation.getEvaluationId(), HumanActionType.REVIEW_DECISION.getCode());
+        if (draftRevision != null) {
+            payload.put("draft_revision", draftRevision);
         }
+        evaluationService.record(work, me, HumanActionType.REVIEW_DECISION, evaluation, payload);
         return StatusResponse.of(evaluation);
     }
 

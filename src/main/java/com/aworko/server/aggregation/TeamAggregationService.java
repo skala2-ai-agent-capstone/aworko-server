@@ -87,7 +87,8 @@ public class TeamAggregationService {
         return new TeamDashboard.Approval(saved.getId(), saved.getApprovedBy(), saved.getApprovedAt());
     }
 
-    private Team requireTeamLeadOf(AuthPrincipal me, String teamId) {
+    /** 담당 팀장만. 팀 평가(TeamEvaluationService)도 같은 권한을 쓴다 */
+    Team requireTeamLeadOf(AuthPrincipal me, String teamId) {
         Team team = teamRepository.findByTeamIdAndCompanyId(teamId, me.companyId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "팀을 찾을 수 없습니다"));
         if (!me.hasRole(UserRole.TEAM_LEAD) || !teamId.equals(me.teamId())) {

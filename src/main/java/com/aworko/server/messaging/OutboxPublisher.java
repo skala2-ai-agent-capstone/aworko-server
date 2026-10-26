@@ -2,6 +2,7 @@ package com.aworko.server.messaging;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.List;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
@@ -29,19 +30,30 @@ public class OutboxPublisher {
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
-    public EvaluationMessages.Resume resume(String evaluationId, String action) {
-        var msg = new EvaluationMessages.Resume(newMessageId(), MessageType.RESUME.name(), evaluationId, action, 0);
-        save(MessageType.RESUME, evaluationId, msg);
-        return msg;
-    }
-
-    @Transactional(propagation = Propagation.MANDATORY)
     public EvaluationMessages.LiveEvaluate liveEvaluate(String liveEvalId, String companyId, String workId,
                                                         String requestedBy, int fromSeq, int toSeq,
                                                         String rubricVersion) {
         var msg = new EvaluationMessages.LiveEvaluate(newMessageId(), MessageType.LIVE_EVALUATE.name(), liveEvalId,
                 companyId, workId, requestedBy, fromSeq, toSeq, rubricVersion, 0);
         save(MessageType.LIVE_EVALUATE, liveEvalId, msg);
+        return msg;
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public EvaluationMessages.RubricGenerate rubricGenerate(String generationId, String companyId, String policyDocId,
+                                                            String policyVersion, List<String> workTypes,
+                                                            String requestedBy) {
+        var msg = new EvaluationMessages.RubricGenerate(newMessageId(), MessageType.RUBRIC_GENERATE.name(), generationId,
+                companyId, policyDocId, policyVersion, workTypes, requestedBy, 0);
+        save(MessageType.RUBRIC_GENERATE, generationId, msg);
+        return msg;
+    }
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public EvaluationMessages.TeamEvaluate teamEvaluate(String requestId, String companyId) {
+        var msg = new EvaluationMessages.TeamEvaluate(newMessageId(), MessageType.TEAM_EVALUATE.name(), requestId,
+                companyId, 0);
+        save(MessageType.TEAM_EVALUATE, requestId, msg);
         return msg;
     }
 

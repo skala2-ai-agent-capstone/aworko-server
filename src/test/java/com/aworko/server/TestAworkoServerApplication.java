@@ -11,7 +11,7 @@ import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 
 /**
  * DB·RabbitMQ를 직접 띄우지 않고 백엔드를 실행한다: ./gradlew bootTestRun
- * Docker에 Postgres(목표 스키마 적용)·RabbitMQ 컨테이너를 띄우고 테스트 계정을 넣은 뒤 서버를 시작한다.
+ * Docker에 Postgres(MCP 스키마 적용)·RabbitMQ 컨테이너를 띄우고 테스트 계정을 넣은 뒤 서버를 시작한다.
  * 종료하면 컨테이너와 데이터도 사라진다. 로그인: 사번 1021(팀원) / 3001(팀장), 비밀번호 1234
  */
 public class TestAworkoServerApplication {

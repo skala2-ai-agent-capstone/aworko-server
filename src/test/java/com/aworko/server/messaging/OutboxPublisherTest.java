@@ -47,13 +47,9 @@ class OutboxPublisherTest {
     }
 
     @Test
-    void resumeUsesResumeRoutingKey() {
-        publisher.resume("EVAL-1", "appeal");
-
-        OutboxEvent saved = captureSaved();
-        assertThat(saved.getType()).isEqualTo("RESUME");
-        assertThat(saved.getRoutingKey()).isEqualTo(Topology.RK_RESUME);
-        assertThat(saved.getPayload().get("action").asText()).isEqualTo("appeal");
+    void resumeIsNoLongerAMessageType() {
+        // 본인 확인·이의·검토 결정은 백엔드 트랜잭션에서 처리한다. Agent 요청 큐로 갈 수 있는 평가 메시지는 EVALUATE뿐이다
+        assertThat(MessageType.values()).extracting(Enum::name).doesNotContain("RESUME");
     }
 
     @Test

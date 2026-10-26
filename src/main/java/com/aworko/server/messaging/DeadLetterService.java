@@ -26,7 +26,7 @@ public class DeadLetterService {
     private final EvaluationFailureRepository failureRepository;
     private final LiveEvaluationRepository liveEvaluationRepository;
 
-    /** 평가 메시지(EVALUATE·RESUME): 실패 기록을 남기고 평가 건을 '처리 실패'로 바꾼다. */
+    /** 평가 메시지(EVALUATE): 실패 기록을 남기고 평가 건을 '처리 실패'로 바꾼다. */
     @Transactional
     public void recordEvaluationFailure(JsonNode message, String reason) {
         String evaluationId = text(message, "evaluation_id").orElse(null);

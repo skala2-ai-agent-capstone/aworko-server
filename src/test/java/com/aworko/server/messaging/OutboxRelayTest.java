@@ -63,7 +63,7 @@ class OutboxRelayTest {
     @Test
     void stopsBatchAndKeepsPendingWhenBrokerDoesNotConfirm() {
         OutboxEvent first = event("EVALUATE", Topology.RK_EVALUATE, "m-1");
-        OutboxEvent second = event("RESUME", Topology.RK_RESUME, "m-2");
+        OutboxEvent second = event("LIVE_EVALUATE", Topology.RK_LIVE_EVALUATE, "m-2");
         when(repository.lockPending(10)).thenReturn(List.of(first, second));
         doThrow(new AmqpException("nack")).when(ops).waitForConfirmsOrDie(anyLong());
 
@@ -80,18 +80,18 @@ class OutboxRelayTest {
 
     @Test
     void messageIsPersistentJsonWithMessageIdAndTypeHeader() {
-        OutboxEvent e = event("RESUME", Topology.RK_RESUME, "m-9");
+        OutboxEvent e = event("EVALUATE", Topology.RK_EVALUATE, "m-9");
         when(repository.lockPending(10)).thenReturn(List.of(e));
 
         relay.relayOnce();
 
         ArgumentCaptor<Message> captor = ArgumentCaptor.forClass(Message.class);
-        verify(ops).send(eq(Topology.EVALUATION_EXCHANGE), eq(Topology.RK_RESUME), captor.capture());
+        verify(ops).send(eq(Topology.EVALUATION_EXCHANGE), eq(Topology.RK_EVALUATE), captor.capture());
         var props = captor.getValue().getMessageProperties();
         assertThat(props.getMessageId()).isEqualTo("m-9");
         assertThat(props.getContentType()).isEqualTo("application/json");
         assertThat(props.getDeliveryMode()).isEqualTo(MessageDeliveryMode.PERSISTENT);
-        assertThat((String) props.getHeader(OutboxRelay.HEADER_TYPE)).isEqualTo("RESUME");
+        assertThat((String) props.getHeader(OutboxRelay.HEADER_TYPE)).isEqualTo("EVALUATE");
         assertThat(new String(captor.getValue().getBody())).contains("\"evaluation_id\":\"EVAL-1\"");
     }
 

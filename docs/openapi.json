@@ -1,0 +1,2888 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Aworko Server API",
+    "description": "업무 기반 AI 활용 역량 평가·코칭 에이전트 백엔드. 로그인, AI 업무 공간(업무·고객 자료·대화·산출물), 실시간 피드백, 업무 완료 접수, 평가 조회·본인 확인·이의 제기, 팀장 검토, 팀 집계, 운영 설정. 요청·응답 칸 이름은 모두 snake_case, 응답 봉투는 {ok, data} / {ok:false, error:{code, message}}",
+    "version": "v1"
+  },
+  "servers": [
+    {
+      "url": "http://34.172.91.57:8080",
+      "description": "ax-eval-gpu 백엔드"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "Workspace",
+      "description": "AI 업무 공간: 업무·고객 자료·대화·산출물. 최종 완료는 POST /api/work-events"
+    },
+    {
+      "name": "Evaluation",
+      "description": "개인 평가 리포트·본인 확인·이의 제기"
+    },
+    {
+      "name": "Work",
+      "description": "업무 완료 접수"
+    },
+    {
+      "name": "Live Evaluation",
+      "description": "실시간 프롬프팅 피드백 (버튼 요청 + 폴링)"
+    },
+    {
+      "name": "Team Dashboard",
+      "description": "팀 집계·집계 승인 (팀장)"
+    },
+    {
+      "name": "Review",
+      "description": "평가 검토 (팀장)"
+    },
+    {
+      "name": "Auth",
+      "description": "로그인·내 정보"
+    },
+    {
+      "name": "Settings",
+      "description": "운영 설정(팀장): 사내 자료·평가 기준 조회"
+    }
+  ],
+  "paths": {
+    "/api/works": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "업무 목록",
+        "description": "scope=mine(기본): 내 업무, scope=team: 담당 팀 업무(팀장만). 최근 활동 순",
+        "operationId": "list",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "description": "mine | team",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "mine"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListWorkSummary"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "새 업무 생성(JSON)",
+        "description": "고객·등록 항목은 선택. 고객 자료는 만든 뒤 따로 올리거나 multipart로 같이 보낸다.",
+        "operationId": "createWithFiles",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkForm"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseWorkDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/works/{workId}/source-documents": {
+      "post": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "고객 자료 올리기(텍스트 JSON)",
+        "description": "본문 텍스트를 직접 보낼 때. 같은 파일 이름은 새 버전",
+        "operationId": "uploadSourceDocument",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceDocumentForm"
+              }
+            },
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseSourceDocumentResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/works/{workId}/messages": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "대화 기록",
+        "description": "messages 뷰(기록 프록시가 저장한 LLM 호출을 펼친 것). 실패한 호출은 질문만 남는다",
+        "operationId": "messages",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListChatMessageResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "AI에게 메시지 보내기",
+        "description": "업무 등록 내용·고객 자료·이전 대화를 붙여 llm-proxy로 보내고 답변을 돌려준다(최대 수 분). 대화 기록(seq)은 프록시가 저장한 뒤 GET .../messages에 나타난다. LLM에 닿지 못하면 503",
+        "operationId": "send",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseChatTurnResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/works/{workId}/artifacts": {
+      "post": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "산출물 저장(초안 저장)",
+        "description": "새 버전(v1, v2 …)으로 저장한다. 최종 완료는 이 버전으로 POST /api/work-events",
+        "operationId": "saveArtifact",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveArtifactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseArtifactResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/work-events": {
+      "post": {
+        "tags": [
+          "Work"
+        ],
+        "summary": "업무 완료 접수",
+        "description": "최종본 저장·업무 완료 시 호출한다. 평가 건을 만들고 평가 요청을 큐에 넣은 뒤 바로 202를 돌려준다. 같은 업무·버전을 다시 보내면 기존 평가 건을 돌려준다(created=false).",
+        "operationId": "complete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkEventRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseWorkEventResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/teams/{teamId}/dashboard/approve": {
+      "post": {
+        "tags": [
+          "Team Dashboard"
+        ],
+        "summary": "집계 승인",
+        "description": "업무 유형·기간 단위로 집계를 승인하고 그 시점 결과를 저장한다. 최소 인원 미달이면 409.",
+        "operationId": "approve",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseApproval"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reviews/{reviewRequestId}/resolve": {
+      "post": {
+        "tags": [
+          "Review"
+        ],
+        "summary": "검토 결정",
+        "description": "keep: 기존 결과 유지 → 확정 / override: new_scores(항목별 0~2, 보안 준수는 0·2)를 새 초안으로 반영 → '확인 대기'(직원 본인 확인) / hold: 자료 보류. AI 재평가는 하지 않는다. 평가가 '검토 대기'일 때만 가능(그 외 409). override에 new_scores가 없거나 범위·항목이 틀리면 400.",
+        "operationId": "resolve",
+        "parameters": [
+          {
+            "name": "reviewRequestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveReviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/live-evaluations": {
+      "post": {
+        "tags": [
+          "Live Evaluation"
+        ],
+        "summary": "실시간 피드백 요청",
+        "description": "업무의 최근 완료 질문·응답 최대 5쌍으로 피드백을 요청한다(202). 사용자별 5분에 1회 — 초과 시 429와 retry_after_seconds. 완료된 질문·응답이 없으면 409, business-mcp에 닿지 못하면 503.",
+        "operationId": "request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiveEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseLiveEvaluationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/evaluations/{evaluationId}/retry": {
+      "post": {
+        "tags": [
+          "Evaluation"
+        ],
+        "summary": "실패·보류 평가 재처리",
+        "description": "'처리 실패' 또는 '자료 보류' 건을 다시 평가한다. 담당 팀장만(202).",
+        "operationId": "retry",
+        "parameters": [
+          {
+            "name": "evaluationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/evaluations/{evaluationId}/confirm": {
+      "post": {
+        "tags": [
+          "Evaluation"
+        ],
+        "summary": "본인 확인(확정)",
+        "description": "'확인 대기'일 때만 가능하다. 그 외 상태면 409.",
+        "operationId": "confirm",
+        "parameters": [
+          {
+            "name": "evaluationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/evaluations/{evaluationId}/appeals": {
+      "post": {
+        "tags": [
+          "Evaluation"
+        ],
+        "summary": "이의 제기",
+        "description": "'확인 대기'일 때만 가능하다. 이의 항목(item_id 또는 항목 이름)으로 검토 요청을 만들어 담당 팀장에게 배정하고 바로 '검토 대기'로 바꾼다(202). 평가에 없는 항목이면 400.",
+        "operationId": "appeal",
+        "parameters": [
+          {
+            "name": "evaluationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppealRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "로그인",
+        "description": "사번·비밀번호로 Access JWT를 발급한다. 이후 요청에 Authorization: Bearer {access_token}을 붙인다.",
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseLoginResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/api/works/{workId}": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "업무 상세",
+        "description": "등록 내용·고객 자료·사내 참고 자료·최근 산출물. 본인은 원문, 같은 팀 팀장은 마스킹본(읽기만)",
+        "operationId": "detail",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseWorkDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/works/{workId}/source-documents/{attachmentId}/file": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "고객 자료 원본 내려받기",
+        "description": "담당자 본인만(원본은 마스킹할 수 없다)",
+        "operationId": "downloadSourceDocument",
+        "parameters": [
+          {
+            "name": "workId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "attachmentId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string",
+                  "format": "byte"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/works/summary": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "업무 현황(내 업무)",
+        "description": "단계별 업무 수, 자료 보류 수, 업무 유형별 이번 주·지난 주 평균 점수(10점 만점)",
+        "operationId": "summary",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseWorkStats"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/work-types": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "업무 유형",
+        "description": "유형별 산출물 이름과 「새 업무 생성」 등록 항목(registration key)",
+        "operationId": "workTypes",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListWorkTypeInfo"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/teams/{teamId}/dashboard": {
+      "get": {
+        "tags": [
+          "Team Dashboard"
+        ],
+        "summary": "팀 대시보드",
+        "description": "업무 유형별 집계. 기간을 생략하면 이번 주(월~일). 유형별 확정 대상 인원이 최소 인원 미만이면 그 유형은 restricted=true이고 상세 통계를 비운다. 담당 팀장만.",
+        "operationId": "dashboard",
+        "parameters": [
+          {
+            "name": "teamId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "example": "2026-10-19"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "example": "2026-10-25"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseTeamDashboard"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/rubrics": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "평가 기준 버전 목록",
+        "description": "업무 유형별 루브릭 버전(현행·폐기·초안)",
+        "operationId": "rubrics",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListRubricSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/rubrics/{docId}/{version}": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "평가 기준 상세",
+        "description": "루브릭 한 버전의 평가 항목(점수 기준·미관측·검토 필요 조건·근거 자료)",
+        "operationId": "rubric",
+        "parameters": [
+          {
+            "name": "docId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseRubricDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/settings/documents": {
+      "get": {
+        "tags": [
+          "Settings"
+        ],
+        "summary": "사내 자료 목록",
+        "description": "references·policies와 기밀(색인 금지) 자료. 본문 제외",
+        "operationId": "documents",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListDocumentSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reviews": {
+      "get": {
+        "tags": [
+          "Review"
+        ],
+        "summary": "내게 배정된 검토 목록",
+        "description": "팀장만. 평가 상태가 '검토 대기'인 건이 처리할 건이다.",
+        "operationId": "list_1",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListReviewSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/reviews/{reviewRequestId}": {
+      "get": {
+        "tags": [
+          "Review"
+        ],
+        "summary": "검토 상세",
+        "description": "검토 요청·이의 내용·평가 리포트(원문 근거·루브릭 항목·코칭). 배정된 팀장만.",
+        "operationId": "detail_1",
+        "parameters": [
+          {
+            "name": "reviewRequestId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseReviewDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/me": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "summary": "내 정보",
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseMeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/live-evaluations/{liveEvalId}": {
+      "get": {
+        "tags": [
+          "Live Evaluation"
+        ],
+        "summary": "실시간 피드백 조회(폴링)",
+        "description": "status가 완료·실패가 될 때까지 2~3초 간격으로 호출한다. 요청자 본인만.",
+        "operationId": "get",
+        "parameters": [
+          {
+            "name": "liveEvalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseLiveEvaluationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/evaluations": {
+      "get": {
+        "tags": [
+          "Evaluation"
+        ],
+        "summary": "내 평가 목록",
+        "description": "내 업무의 평가를 최신순으로 돌려준다.",
+        "operationId": "listMine",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListEvaluationSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/evaluations/{evaluationId}": {
+      "get": {
+        "tags": [
+          "Evaluation"
+        ],
+        "summary": "개인 평가 리포트",
+        "description": "항목별 점수·근거·코칭과 진행 상태. 평가가 진행 중이면 report.items가 비어 있으니 이 API를 2~3초 간격으로 다시 조회해 진행 상태(display_status)를 확인한다. 본인 또는 배정된 팀장만.",
+        "operationId": "detail_2",
+        "parameters": [
+          {
+            "name": "evaluationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseEvaluationDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/customers": {
+      "get": {
+        "tags": [
+          "Workspace"
+        ],
+        "summary": "고객 목록",
+        "description": "업무를 만들 때 고를 고객(내 회사)",
+        "operationId": "customers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiResponseListCustomerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateWorkForm": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "업무명 · 고객사",
+            "example": "카카오엔터프라이즈향 RFP 분석"
+          },
+          "work_type": {
+            "type": "string",
+            "description": "rfp | proposal | quote | reply (또는 rfp_analysis | inquiry_reply). 평가 기준이 유형별로 정해지므로 필수",
+            "example": "rfp"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "목적 · 요구사항(최대 4000자). registration.purpose로 저장",
+            "example": "목적: SI 제안 사전 분석"
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "고객 ID(GET /api/customers). 비우면 고객 미지정"
+          },
+          "files": {
+            "type": "array",
+            "description": "고객 자료(여러 개, 파일당 20MB). PDF·DOCX·XLSX·PPTX·텍스트는 내용을 꺼낸다",
+            "items": {
+              "type": "string",
+              "format": "binary"
+            }
+          }
+        },
+        "required": [
+          "title",
+          "work_type"
+        ]
+      },
+      "ApiResponseWorkDetail": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/WorkDetail"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ArtifactResponse": {
+        "description": "최근 산출물. 아직 없으면 생략",
+        "properties": {
+          "artifact_id": {
+            "type": "string",
+            "example": "ART-3F2A9C1D0B4E"
+          },
+          "version": {
+            "type": "string",
+            "example": "v2"
+          },
+          "author": {
+            "type": "string",
+            "description": "ai_draft | employee",
+            "example": "employee"
+          },
+          "saved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "content": {
+            "type": "string",
+            "description": "본문. 담당자 본인은 원문, 팀장은 마스킹본"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "field_errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FieldError"
+            }
+          },
+          "retry_after_seconds": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "FieldError": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "InternalReference": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "example": "PROD-DOCAI"
+          },
+          "version": {
+            "type": "string",
+            "example": "v3.2"
+          },
+          "title": {
+            "type": "string",
+            "example": "DocAI 제품 설명서"
+          },
+          "source": {
+            "type": "string",
+            "description": "attached | accessed",
+            "example": "attached"
+          }
+        }
+      },
+      "JsonNode": {
+        "description": "업무 등록 내용. 본인은 원문, 팀장은 마스킹본. 등록 기록이 없으면 생략"
+      },
+      "SourceDocumentResponse": {
+        "properties": {
+          "attachment_id": {
+            "type": "string",
+            "example": "ATT-3F2A9C1D0B4E"
+          },
+          "doc_id": {
+            "type": "string",
+            "example": "RFP_원문_v2"
+          },
+          "doc_type": {
+            "type": "string",
+            "example": "rfp"
+          },
+          "version": {
+            "type": "string",
+            "example": "v1"
+          },
+          "grade": {
+            "type": "string",
+            "example": "대외비"
+          },
+          "file_name": {
+            "type": "string",
+            "description": "올린 파일 이름(시드 자료는 생략)",
+            "example": "RFP_원문_v2.pdf"
+          },
+          "content_type": {
+            "type": "string",
+            "example": "application/pdf"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "원본 파일 크기(바이트)"
+          },
+          "length": {
+            "type": "integer",
+            "format": "int32",
+            "description": "꺼낸 텍스트 글자 수"
+          },
+          "text_extracted": {
+            "type": "boolean",
+            "description": "텍스트를 꺼냈는지. false면 AI·평가가 이 자료 내용을 읽지 못한다(이미지·HWP 등)"
+          },
+          "uploaded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkDetail": {
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/WorkSummary"
+          },
+          "artifact_title": {
+            "type": "string",
+            "description": "산출물 이름",
+            "example": "요구사항 대응표"
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "고객 ID"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "editable": {
+            "type": "boolean",
+            "description": "담당자 본인이면 true(대화·저장·완료 가능). 팀장 조회는 false"
+          },
+          "registration": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "source_documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SourceDocumentResponse"
+            }
+          },
+          "internal_references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InternalReference"
+            }
+          },
+          "artifact": {
+            "$ref": "#/components/schemas/ArtifactResponse"
+          }
+        }
+      },
+      "WorkSummary": {
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "example": "W-3F2A9C1D0B4E"
+          },
+          "title": {
+            "type": "string",
+            "example": "카카오엔터프라이즈향 RFP 분석"
+          },
+          "work_type": {
+            "type": "string",
+            "example": "rfp_analysis"
+          },
+          "work_type_label": {
+            "type": "string",
+            "example": "RFP 요구사항 분석"
+          },
+          "type_key": {
+            "type": "string",
+            "description": "프론트 유형 키 rfp | proposal | quote | reply",
+            "example": "rfp"
+          },
+          "customer_name": {
+            "type": "string",
+            "description": "고객 미지정이면 생략",
+            "example": "한빛제약(가상)"
+          },
+          "employee_id": {
+            "type": "string",
+            "example": "E-1021"
+          },
+          "employee_name": {
+            "type": "string",
+            "example": "가상 직원 A"
+          },
+          "status": {
+            "type": "string",
+            "description": "work_cases.status (in_progress | completed)",
+            "example": "in_progress"
+          },
+          "stage": {
+            "type": "string",
+            "description": "화면 표시 단계: 작성 중 | 평가 대기 | 평가 중 | 확인 대기 | 검토 중 | 확정 | 자료 보류 | 평가 실패",
+            "example": "작성 중"
+          },
+          "evaluation_id": {
+            "type": "string",
+            "description": "최근 평가 건"
+          },
+          "evaluation_status": {
+            "type": "string",
+            "description": "최근 평가 상태",
+            "example": "확인 대기"
+          },
+          "artifact_version": {
+            "type": "string",
+            "description": "최근 산출물 버전",
+            "example": "v2"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "생성·대화·산출물 저장·평가 중 가장 최근 시각"
+          }
+        }
+      },
+      "CreateWorkRequest": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "업무명",
+            "example": "카카오엔터프라이즈향 RFP 분석",
+            "maxLength": 200,
+            "minLength": 0
+          },
+          "work_type": {
+            "type": "string",
+            "description": "rfp_analysis | proposal | quote | inquiry_reply 또는 프론트 키 rfp | reply. 평가 기준이 유형별로 정해지므로 필수",
+            "example": "rfp",
+            "minLength": 1
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "고객 ID(GET /api/customers). 비우면 고객 미지정",
+            "example": "CU-HANBIT-PHARMA"
+          },
+          "purpose": {
+            "type": "string",
+            "description": "「목적·요구사항」 한 칸. registration.purpose로 저장된다",
+            "example": "목적: SI 제안 사전 분석",
+            "maxLength": 4000,
+            "minLength": 0
+          },
+          "registration": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "description": "업무 등록 내용. key는 GET /api/work-types의 registration_fields. 비우면 등록 기록 없음(미관측), 빈 문자열은 등록했지만 비어 있음"
+            },
+            "description": "업무 등록 내용. key는 GET /api/work-types의 registration_fields. 비우면 등록 기록 없음(미관측), 빈 문자열은 등록했지만 비어 있음"
+          }
+        },
+        "required": [
+          "title",
+          "work_type"
+        ]
+      },
+      "SourceDocumentForm": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "doc_type": {
+            "type": "string",
+            "description": "rfp | rfp_correction | meeting_note | call_note. 비우면 RFP 분석은 rfp, 나머지는 meeting_note"
+          }
+        },
+        "required": [
+          "file"
+        ]
+      },
+      "ApiResponseSourceDocumentResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/SourceDocumentResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "SourceDocumentRequest": {
+        "properties": {
+          "file_name": {
+            "type": "string",
+            "description": "원본 파일 이름. 확장자를 뺀 이름이 doc_id가 된다",
+            "example": "RFP_원문_v2.txt",
+            "maxLength": 200,
+            "minLength": 0
+          },
+          "content": {
+            "type": "string",
+            "description": "본문 텍스트(최대 20만 자)",
+            "maxLength": 200000,
+            "minLength": 0
+          },
+          "doc_type": {
+            "type": "string",
+            "description": "rfp | rfp_correction | meeting_note | call_note. 비우면 RFP 분석은 rfp, 나머지는 meeting_note",
+            "example": "rfp"
+          },
+          "grade": {
+            "type": "string",
+            "description": "등급. 비우면 대외비",
+            "example": "대외비",
+            "maxLength": 20,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "content",
+          "file_name"
+        ]
+      },
+      "SendMessageRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "보낼 메시지",
+            "example": "이 RFP에서 보안 요구사항만 뽑아서 정리해줘",
+            "maxLength": 8000,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "ApiResponseChatTurnResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ChatTurnResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ChatTurnResponse": {
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "reply": {
+            "type": "string",
+            "description": "AI 답변"
+          }
+        }
+      },
+      "SaveArtifactRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "description": "산출물 본문(마크다운·텍스트, 최대 10만 자)",
+            "maxLength": 100000,
+            "minLength": 0
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "ApiResponseArtifactResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ArtifactResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "WorkEventRequest": {
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "업무 ID",
+            "example": "W-E2E-QT-08",
+            "minLength": 1
+          },
+          "deliverable_version": {
+            "type": "string",
+            "description": "최종 산출물 버전",
+            "example": "v2",
+            "minLength": 1
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "중복 방지 키(선택). 없으면 {업무}:{버전}:{루브릭 버전}"
+          }
+        },
+        "required": [
+          "deliverable_version",
+          "task_id"
+        ]
+      },
+      "ApiResponseWorkEventResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/WorkEventResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "WorkEventResponse": {
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "example": "EVAL-E2E-QT-08-v2"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "false면 같은 완료 이벤트로 이미 만들어진 평가 건"
+          },
+          "status": {
+            "type": "string",
+            "example": "대기"
+          }
+        }
+      },
+      "ApproveRequest": {
+        "properties": {
+          "work_type": {
+            "type": "string",
+            "description": "승인할 업무 유형",
+            "example": "quote",
+            "minLength": 1
+          },
+          "from": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-10-19"
+          },
+          "to": {
+            "type": "string",
+            "format": "date",
+            "example": "2026-10-25"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "work_type"
+        ]
+      },
+      "ApiResponseApproval": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/Approval"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "Approval": {
+        "properties": {
+          "approval_id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "approved_by": {
+            "type": "string"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ResolveReviewRequest": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "keep(유지 → 확정) | override(팀장 점수 반영 → 확인 대기) | hold(보류)",
+            "enum": [
+              "keep",
+              "override",
+              "hold"
+            ],
+            "example": "keep"
+          },
+          "note": {
+            "type": "string",
+            "description": "검토 의견. override면 고친 항목의 사유로도 남는다",
+            "example": "원문 근거 확인, 기존 점수 유지",
+            "maxLength": 2000,
+            "minLength": 0
+          },
+          "new_scores": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "description": "override일 때 필수. 항목별 새 점수(0~2, 보안 준수는 0·2). 예: {\"quote.3\": 2}"
+            },
+            "description": "override일 때 필수. 항목별 새 점수(0~2, 보안 준수는 0·2). 예: {\"quote.3\": 2}"
+          }
+        },
+        "required": [
+          "decision"
+        ]
+      },
+      "ApiResponseStatusResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/StatusResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "StatusResponse": {
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "example": "EVAL-E2E-QT-08-v2"
+          },
+          "status": {
+            "type": "string",
+            "example": "확정"
+          },
+          "display_status": {
+            "type": "string",
+            "example": "확정"
+          }
+        }
+      },
+      "LiveEvaluationRequest": {
+        "properties": {
+          "work_id": {
+            "type": "string",
+            "description": "피드백 받을 업무 ID",
+            "example": "W-E2E-QT-08",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "work_id"
+        ]
+      },
+      "ApiResponseLiveEvaluationResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/LiveEvaluationResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "LiveEvaluationResponse": {
+        "properties": {
+          "live_eval_id": {
+            "type": "string",
+            "example": "LIVE-3f2a9c1d0b4e"
+          },
+          "work_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "대기 | 생성 중 | 완료 | 실패. 완료·실패가 될 때까지 2~3초 간격으로 다시 조회",
+            "example": "대기"
+          },
+          "phase": {
+            "type": "string",
+            "description": "패널 단계 waiting | generating | done | failed (status와 같은 뜻)",
+            "example": "waiting"
+          },
+          "from_seq": {
+            "type": "integer",
+            "format": "int32",
+            "description": "피드백 대상 대화 범위: 최근 완료 질문·응답 최대 5쌍의 첫 질문 seq(요청 시점에 고정)",
+            "example": 3
+          },
+          "to_seq": {
+            "type": "integer",
+            "format": "int32",
+            "description": "마지막 답변 seq",
+            "example": 12
+          },
+          "items": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "coaching": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "error": {
+            "type": "string",
+            "description": "실패 사유"
+          },
+          "display": {
+            "$ref": "#/components/schemas/LiveFeedbackDisplay"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "LiveFeedbackDisplay": {
+        "description": "완료일 때 패널 표시용 {items:[{label, state, note}], coaching}",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiveFeedbackItem"
+            }
+          },
+          "coaching": {
+            "type": "string",
+            "description": "코칭 한 줄(첫 제안의 다음 행동)",
+            "example": "다음 메시지에서 가격 정책 문서와 금액을 한 번 더 대조해보세요."
+          },
+          "suggested_prompt": {
+            "type": "string",
+            "description": "그대로 보내 볼 수 있는 추천 프롬프트"
+          }
+        }
+      },
+      "LiveFeedbackItem": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "평가 기준 항목 이름. 기준이 없으면 잘한 점·보완할 점·확인 필요",
+            "example": "결과 검증"
+          },
+          "state": {
+            "type": "string",
+            "description": "good(양호) | warn(보완 필요) | pending(확인 필요)",
+            "example": "warn"
+          },
+          "note": {
+            "type": "string",
+            "description": "진단",
+            "example": "AI 결과를 참조 자료와 아직 대조하지 않았어요."
+          }
+        }
+      },
+      "AppealRequest": {
+        "properties": {
+          "target_items": {
+            "type": "array",
+            "description": "이의 제기할 항목 ID",
+            "example": [
+              "quote.3"
+            ],
+            "items": {
+              "type": "string",
+              "description": "이의 제기할 항목 ID",
+              "example": "[\"quote.3\"]",
+              "minLength": 1
+            },
+            "minItems": 1
+          },
+          "comment": {
+            "type": "string",
+            "description": "이의 사유",
+            "example": "할인 승인 요청 기록을 근거로 확인해 주세요",
+            "maxLength": 2000,
+            "minLength": 0
+          },
+          "cited_evidence": {
+            "type": "array",
+            "description": "근거로 지정한 기존 업무 근거 ID(선택)",
+            "items": {
+              "type": "string",
+              "description": "근거로 지정한 기존 업무 근거 ID(선택)"
+            }
+          }
+        },
+        "required": [
+          "comment",
+          "target_items"
+        ]
+      },
+      "LoginRequest": {
+        "properties": {
+          "employee_no": {
+            "type": "integer",
+            "format": "int32",
+            "description": "사번",
+            "example": 1021
+          },
+          "password": {
+            "type": "string",
+            "example": "1234",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "employee_no",
+          "password"
+        ]
+      },
+      "ApiResponseLoginResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/LoginResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "LoginResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "이후 요청에 Authorization: Bearer {access_token}으로 보낸다"
+          },
+          "token_type": {
+            "type": "string",
+            "example": "Bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "format": "int64",
+            "description": "만료까지 남은 초",
+            "example": 28800
+          },
+          "user": {
+            "$ref": "#/components/schemas/MeResponse"
+          }
+        }
+      },
+      "MeResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "example": "E-1021"
+          },
+          "employee_no": {
+            "type": "integer",
+            "format": "int32",
+            "description": "사번",
+            "example": 1021
+          },
+          "name": {
+            "type": "string",
+            "example": "가상 직원 A"
+          },
+          "avatar_initial": {
+            "type": "string",
+            "description": "아바타에 표시할 이름 첫 글자",
+            "example": "가"
+          },
+          "role": {
+            "type": "string",
+            "description": "member(팀원) | team_lead(팀장, 검토자 겸임)",
+            "example": "member"
+          },
+          "company_id": {
+            "type": "string",
+            "example": "C-LGCNS-SALES"
+          },
+          "company_name": {
+            "type": "string",
+            "example": "LG CNS 영업담당"
+          },
+          "team_id": {
+            "type": "string",
+            "example": "T-SALES-01"
+          },
+          "team_name": {
+            "type": "string",
+            "example": "영업1팀"
+          }
+        }
+      },
+      "ApiResponseListWorkSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkSummary"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ApiResponseListChatMessageResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatMessageResponse"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ChatMessageResponse": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "example": "W-3F2A9C1D0B4E-M01"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32",
+            "example": 1
+          },
+          "role": {
+            "type": "string",
+            "description": "user | assistant",
+            "example": "user"
+          },
+          "content": {
+            "type": "string",
+            "description": "본문. 담당자 본인은 원문, 팀장은 마스킹본"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ApiResponseWorkStats": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/WorkStats"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "TypeScore": {
+        "description": "업무 유형별 평균 점수(10점 만점). 확인 대기·검토 대기·확정 평가의 최신 초안, 미관측 항목 제외",
+        "properties": {
+          "work_type": {
+            "type": "string",
+            "example": "quote"
+          },
+          "label": {
+            "type": "string",
+            "example": "견적서 작성"
+          },
+          "works": {
+            "type": "integer",
+            "format": "int32",
+            "description": "업무 수",
+            "example": 4
+          },
+          "this_week": {
+            "type": "number",
+            "format": "double",
+            "description": "이번 주(월~일) 평균. 평가가 없으면 생략",
+            "example": 8.0
+          },
+          "last_week": {
+            "type": "number",
+            "format": "double",
+            "description": "지난 주 평균",
+            "example": 7.2
+          }
+        }
+      },
+      "WorkStats": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "example": 18
+          },
+          "stages": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "description": "단계별 업무 수 (WorkSummary.stage)"
+            },
+            "description": "단계별 업무 수 (WorkSummary.stage)"
+          },
+          "needs_material": {
+            "type": "integer",
+            "format": "int32",
+            "description": "자료 보완이 필요한(자료 보류) 업무 수",
+            "example": 2
+          },
+          "by_type": {
+            "type": "array",
+            "description": "업무 유형별 평균 점수(10점 만점). 확인 대기·검토 대기·확정 평가의 최신 초안, 미관측 항목 제외",
+            "items": {
+              "$ref": "#/components/schemas/TypeScore"
+            }
+          }
+        }
+      },
+      "ApiResponseListWorkTypeInfo": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkTypeInfo"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "Field": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "submission_deadline"
+          },
+          "label": {
+            "type": "string",
+            "example": "제출 기한"
+          }
+        }
+      },
+      "WorkTypeInfo": {
+        "properties": {
+          "work_type": {
+            "type": "string",
+            "example": "rfp_analysis"
+          },
+          "label": {
+            "type": "string",
+            "example": "RFP 요구사항 분석"
+          },
+          "artifact_title": {
+            "type": "string",
+            "description": "산출물 이름",
+            "example": "요구사항 대응표"
+          },
+          "registration_fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Field"
+            }
+          }
+        }
+      },
+      "ApiResponseTeamDashboard": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/TeamDashboard"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "DailyCount": {
+        "description": "기간 내 일별 평가 접수 건수",
+        "properties": {
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "Issue": {
+        "description": "반복 보완점 Top 3. restricted면 빈 목록",
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "ItemStat": {
+        "description": "restricted면 빈 목록",
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scored_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "unobserved_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "observed_rate": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 가능 비율(%)"
+          },
+          "average_score": {
+            "type": "number",
+            "format": "double",
+            "description": "채점 항목 평균(0~2). 채점 0건이면 null"
+          },
+          "distribution": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int32",
+              "description": "점수 분포 {\"0\":n, \"1\":n, \"2\":n}"
+            },
+            "description": "점수 분포 {\"0\":n, \"1\":n, \"2\":n}"
+          }
+        }
+      },
+      "Stats": {
+        "properties": {
+          "collected_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "수집 건수: 기간 내 접수된 평가 건"
+          },
+          "processed_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 리포트까지 생성된 건(확인 대기·검토 대기·확정)"
+          },
+          "process_rate": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 처리율(%)"
+          },
+          "confirmed_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "확정 건수(업무별 최신 1건)"
+          },
+          "excluded_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "미확인·검토 중 등 집계 제외 건수"
+          },
+          "unobserved_rate": {
+            "type": "integer",
+            "format": "int32",
+            "description": "확정 평가의 항목 중 미관측 비율(%)"
+          },
+          "target_member_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "확정 평가 대상 인원"
+          },
+          "target_type_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "확정 평가가 있는 업무 유형 수"
+          }
+        }
+      },
+      "TeamDashboard": {
+        "properties": {
+          "team_id": {
+            "type": "string"
+          },
+          "team_name": {
+            "type": "string"
+          },
+          "period_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "period_to": {
+            "type": "string",
+            "format": "date"
+          },
+          "min_aggregation_size": {
+            "type": "integer",
+            "format": "int32",
+            "description": "유형별 최소 집계 인원. 미달 유형은 상세 통계를 숨긴다",
+            "example": 5
+          },
+          "stats": {
+            "$ref": "#/components/schemas/Stats"
+          },
+          "daily_trend": {
+            "type": "array",
+            "description": "기간 내 일별 평가 접수 건수",
+            "items": {
+              "$ref": "#/components/schemas/DailyCount"
+            }
+          },
+          "work_types": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkTypeSection"
+            }
+          }
+        }
+      },
+      "WorkTypeSection": {
+        "properties": {
+          "work_type": {
+            "type": "string",
+            "example": "quote"
+          },
+          "work_type_name": {
+            "type": "string",
+            "example": "견적서 작성"
+          },
+          "collected_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "confirmed_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "member_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "확정 평가 대상 인원"
+          },
+          "restricted": {
+            "type": "boolean",
+            "description": "true면 최소 인원 미달로 상세 통계 비공개"
+          },
+          "message": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "description": "restricted면 빈 목록",
+            "items": {
+              "$ref": "#/components/schemas/ItemStat"
+            }
+          },
+          "top_issues": {
+            "type": "array",
+            "description": "반복 보완점 Top 3. restricted면 빈 목록",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
+          },
+          "approval": {
+            "$ref": "#/components/schemas/Approval"
+          }
+        }
+      },
+      "ApiResponseListRubricSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RubricSummary"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "RubricSummary": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "example": "RUB-quote"
+          },
+          "version": {
+            "type": "string",
+            "example": "v2"
+          },
+          "work_type": {
+            "type": "string",
+            "example": "quote"
+          },
+          "work_type_label": {
+            "type": "string",
+            "example": "견적서 작성"
+          },
+          "title": {
+            "type": "string",
+            "example": "견적서 루브릭"
+          },
+          "status": {
+            "type": "string",
+            "description": "현행 | 폐기 | 초안",
+            "example": "현행"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "item_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 항목 수",
+            "example": 5
+          }
+        }
+      },
+      "ApiResponseRubricDetail": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RubricDetail"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "RubricDetail": {
+        "properties": {
+          "rubric": {
+            "$ref": "#/components/schemas/RubricSummary"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RubricItem"
+            }
+          }
+        }
+      },
+      "RubricItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "example": "q.1"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "item": {
+            "type": "string",
+            "example": "문제 정의"
+          },
+          "criterion": {
+            "type": "string",
+            "description": "평가 질문"
+          },
+          "score2": {
+            "type": "string",
+            "description": "2점 기준"
+          },
+          "score1": {
+            "type": "string",
+            "description": "1점 기준(없을 수 있음)"
+          },
+          "score0": {
+            "type": "string",
+            "description": "0점 기준"
+          },
+          "unobserved": {
+            "type": "string",
+            "description": "미관측 조건"
+          },
+          "needs_review": {
+            "type": "string",
+            "description": "검토 필요 조건"
+          },
+          "evidence_sources": {
+            "type": "array",
+            "description": "근거로 볼 자료",
+            "items": {
+              "type": "string",
+              "description": "근거로 볼 자료"
+            }
+          },
+          "related_clauses": {
+            "type": "array",
+            "description": "관련 조항",
+            "items": {
+              "type": "string",
+              "description": "관련 조항"
+            }
+          }
+        }
+      },
+      "ApiResponseListDocumentSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DocumentSummary"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "DocumentSummary": {
+        "properties": {
+          "doc_id": {
+            "type": "string",
+            "example": "PROD-DOCAI"
+          },
+          "version": {
+            "type": "string",
+            "example": "v3.2"
+          },
+          "title": {
+            "type": "string",
+            "example": "DocAI 제품 설명서"
+          },
+          "collection": {
+            "type": "string",
+            "description": "references | policies. 기밀(색인 금지) 자료는 생략",
+            "example": "references"
+          },
+          "grade": {
+            "type": "string",
+            "example": "사내"
+          },
+          "status": {
+            "type": "string",
+            "description": "현행 | 폐기 | 초안",
+            "example": "현행"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "source_file": {
+            "type": "string",
+            "example": "제품_서비스_제공범위.pdf"
+          },
+          "indexed": {
+            "type": "boolean",
+            "description": "검색 색인 대상. false = 기밀(정책 검사에만 사용)"
+          }
+        }
+      },
+      "ApiResponseListReviewSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewSummary"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ReviewSummary": {
+        "properties": {
+          "review_request_id": {
+            "type": "string",
+            "example": "RVQ-3f2a9c1d0b4e"
+          },
+          "evaluation_id": {
+            "type": "string",
+            "example": "EVAL-E2E-QT-08-v2"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "task_title": {
+            "type": "string"
+          },
+          "work_type": {
+            "type": "string"
+          },
+          "employee_id": {
+            "type": "string",
+            "description": "검토 대상 직원 ID"
+          },
+          "target_items": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "reason": {
+            "type": "string",
+            "description": "이의 제기 또는 채점 불일치 사유"
+          },
+          "status": {
+            "type": "string",
+            "description": "평가 상태. 검토 대기면 처리할 건",
+            "example": "검토 대기"
+          },
+          "display_status": {
+            "type": "string"
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ApiResponseReviewDetail": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/ReviewDetail"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "Appeal": {
+        "description": "직원의 이의 제기. 채점 불일치로 생긴 검토면 null",
+        "properties": {
+          "comment": {
+            "type": "string"
+          },
+          "target_items": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "cited_evidence": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "submitted_by": {
+            "type": "string"
+          },
+          "submitted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Coaching": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "강점 | 보완점 | 기록 안내"
+          },
+          "text": {
+            "type": "string"
+          },
+          "target_span_id": {
+            "type": "string",
+            "description": "개선 대상 산출물 구간"
+          }
+        }
+      },
+      "EvaluationDetail": {
+        "properties": {
+          "evaluation": {
+            "$ref": "#/components/schemas/EvaluationSummary"
+          },
+          "draft_revision": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 초안 차수. 아직 없으면 null"
+          },
+          "report": {
+            "$ref": "#/components/schemas/EvaluationReport"
+          },
+          "progress": {
+            "type": "array",
+            "description": "진행 기록 (수집 중 → 평가 중 → 근거 확인 중 → 코칭 생성 중)",
+            "items": {
+              "$ref": "#/components/schemas/Progress"
+            }
+          },
+          "review_requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Review"
+            }
+          }
+        }
+      },
+      "EvaluationReport": {
+        "properties": {
+          "total_score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "채점한 항목 점수 합",
+            "example": 7
+          },
+          "max_score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "채점한 항목 수 × 2 (미관측·검토 필요는 분모에서 제외)",
+            "example": 8
+          },
+          "scored_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "채점 항목 수",
+            "example": 4
+          },
+          "unobserved_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "미관측 항목 수 (0점으로 계산하지 않음)",
+            "example": 1
+          },
+          "needs_review_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "검토 필요 항목 수",
+            "example": 0
+          },
+          "observed_rate": {
+            "type": "integer",
+            "format": "int32",
+            "description": "평가 가능 비율(%) = 채점 항목 ÷ 전체 항목",
+            "example": 80
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluationReportItem"
+            }
+          }
+        }
+      },
+      "EvaluationReportItem": {
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "example": "quote.3"
+          },
+          "name": {
+            "type": "string",
+            "example": "결과 검증"
+          },
+          "status": {
+            "type": "string",
+            "description": "채점 | 미관측 | 검토 필요"
+          },
+          "score": {
+            "type": "integer",
+            "format": "int32",
+            "description": "0·1·2. 미관측·검토 필요면 null"
+          },
+          "score_label": {
+            "type": "string",
+            "example": "2점"
+          },
+          "reason": {
+            "type": "string",
+            "description": "판단 이유"
+          },
+          "evidence_ids": {
+            "type": "array",
+            "description": "근거 ID (대화·산출물 구간·문서 조항)",
+            "items": {
+              "type": "string",
+              "description": "근거 ID (대화·산출물 구간·문서 조항)"
+            }
+          },
+          "coaching": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Coaching"
+            }
+          }
+        }
+      },
+      "EvaluationSummary": {
+        "properties": {
+          "evaluation_id": {
+            "type": "string",
+            "example": "EVAL-E2E-QT-08-v2"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "업무 ID",
+            "example": "W-E2E-QT-08"
+          },
+          "task_title": {
+            "type": "string",
+            "description": "업무 제목"
+          },
+          "work_type": {
+            "type": "string",
+            "description": "rfp_analysis | proposal | quote | inquiry_reply"
+          },
+          "work_type_name": {
+            "type": "string",
+            "description": "업무 유형 이름",
+            "example": "견적서 작성"
+          },
+          "artifact_version": {
+            "type": "string",
+            "example": "v2"
+          },
+          "rubric_version": {
+            "type": "string",
+            "example": "v2"
+          },
+          "status": {
+            "type": "string",
+            "description": "DB 상태(10단계)",
+            "example": "확인 대기"
+          },
+          "display_status": {
+            "type": "string",
+            "description": "화면 표시 상태: 평가 중 | 확인 대기 | 검토 중 | 확정 | 보류 | 실패",
+            "example": "확인 대기"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Progress": {
+        "description": "진행 기록 (수집 중 → 평가 중 → 근거 확인 중 → 코칭 생성 중)",
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Review": {
+        "properties": {
+          "review_request_id": {
+            "type": "string"
+          },
+          "target_items": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reviewer_id": {
+            "type": "string",
+            "description": "담당 팀장"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReviewDetail": {
+        "properties": {
+          "review_request_id": {
+            "type": "string"
+          },
+          "target_items": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "review_memo": {
+            "$ref": "#/components/schemas/JsonNode"
+          },
+          "appeal": {
+            "$ref": "#/components/schemas/Appeal"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/EvaluationDetail"
+          }
+        }
+      },
+      "ApiResponseMeResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MeResponse"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ApiResponseListEvaluationSummary": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluationSummary"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ApiResponseEvaluationDetail": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "$ref": "#/components/schemas/EvaluationDetail"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "ApiResponseListCustomerResponse": {
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerResponse"
+            }
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      },
+      "CustomerResponse": {
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "example": "CU-HANBIT-PHARMA"
+          },
+          "name": {
+            "type": "string",
+            "example": "한빛제약(가상)"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  }
+}

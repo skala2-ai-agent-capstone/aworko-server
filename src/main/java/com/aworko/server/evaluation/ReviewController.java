@@ -41,8 +41,9 @@ public class ReviewController {
     }
 
     @Operation(summary = "검토 결정",
-            description = "keep: 기존 결과 유지 → 확정 / override: 수정 요청 → Agent 재평가 후 다시 본인 확인 / hold: 자료 보류. "
-                    + "평가가 '검토 대기'일 때만 가능(그 외 409).")
+            description = "keep: 기존 결과 유지 → 확정 / override: new_scores(항목별 0~2, 보안 준수는 0·2)를 새 초안으로 반영 → "
+                    + "'확인 대기'(직원 본인 확인) / hold: 자료 보류. AI 재평가는 하지 않는다. "
+                    + "평가가 '검토 대기'일 때만 가능(그 외 409). override에 new_scores가 없거나 범위·항목이 틀리면 400.")
     @PostMapping("/{reviewRequestId}/resolve")
     public ApiResponse<StatusResponse> resolve(@AuthenticationPrincipal AuthPrincipal me,
                                                @PathVariable String reviewRequestId,

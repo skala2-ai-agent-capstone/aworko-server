@@ -4,7 +4,7 @@ INSERT INTO teams (team_id, company_id, name) VALUES ('T-SALES-01', 'C-LGCNS-SAL
 INSERT INTO users (user_id, company_id, team_id, name, role, employee_no, password) VALUES
   ('E-1021', 'C-LGCNS-SALES', 'T-SALES-01', '가상 직원 A', 'member', 1021, '1234'),
   ('L-3001', 'C-LGCNS-SALES', 'T-SALES-01', '가상 팀장', 'team_lead', 3001, '1234'),
-  ('AD-4001', 'C-LGCNS-SALES', NULL, '이전 시드 관리자', 'admin', 4001, '1234')
+  ('E-4001', 'C-LGCNS-SALES', NULL, '팀 없는 직원', 'member', 4001, '1234')
 ON CONFLICT DO NOTHING;
 INSERT INTO customers (customer_id, company_id, name) VALUES ('CU-01', 'C-LGCNS-SALES', '가상 고객') ON CONFLICT DO NOTHING;
 INSERT INTO documents (doc_id, version, company_id, title, grade, collection, indexed, status, effective_from, work_type) VALUES

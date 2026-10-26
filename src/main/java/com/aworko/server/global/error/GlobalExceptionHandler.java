@@ -11,6 +11,8 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @Slf4j
@@ -38,9 +40,17 @@ public class GlobalExceptionHandler {
         return respond(code, ErrorResponse.of(code, code.getDefaultMessage(), fields));
     }
 
+    /** 업로드 한도(spring.servlet.multipart) 초과 */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUploadSize(MaxUploadSizeExceededException e) {
+        ErrorCode code = ErrorCode.VALIDATION_ERROR;
+        return respond(code, ErrorResponse.of(code, "파일은 20MB까지, 한 번에 60MB까지 올릴 수 있습니다"));
+    }
+
     @ExceptionHandler({
             HttpMessageNotReadableException.class,
             MissingServletRequestParameterException.class,
+            MissingServletRequestPartException.class,
             MethodArgumentTypeMismatchException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleBadRequest(Exception e) {
