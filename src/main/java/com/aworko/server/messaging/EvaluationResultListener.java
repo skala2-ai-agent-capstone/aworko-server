@@ -11,6 +11,7 @@ import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
 import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionException;
 
 /**
  * evaluation.results 소비. 형식이 깨진 알림은 버린다(다시 받아도 처리할 수 없다).
@@ -36,7 +37,8 @@ public class EvaluationResultListener {
                 });
         try {
             resultService.apply(saved);
-        } catch (DataAccessException e) {
+        } catch (DataAccessException | TransactionException e) {
+            // 연결을 아예 못 얻으면 트랜잭션 시작에서 CannotCreateTransactionException(TransactionException)이 난다
             log.warn("Final evaluation result requeued after DB error: message_id={}, error={}", messageId,
                     e.getClass().getSimpleName());
             pause();
@@ -52,7 +54,7 @@ public class EvaluationResultListener {
         }
     }
 
-    private static void pause() {
+    static void pause() {
         try {
             Thread.sleep(REQUEUE_PAUSE_MS);
         } catch (InterruptedException e) {

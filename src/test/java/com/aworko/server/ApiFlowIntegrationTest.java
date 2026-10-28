@@ -229,6 +229,43 @@ class ApiFlowIntegrationTest {
             assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'EVALUATE' AND aggregate_id = 'EVAL-F1'"))
                     .isEqualTo(1);
         }
+
+        @Test
+        void retryOnHoldSendsANewEvaluateMessage() throws Exception {
+            setStatus("EVAL-F1", "자료 보류");
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/retry"), lead))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.status").value("대기"));
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'EVALUATE' AND aggregate_id = 'EVAL-F1'"))
+                    .isEqualTo(1);
+        }
+
+        /** 직원이 새 버전으로 다시 완료한 뒤에는 이전 평가를 재처리하지 않는다(한 업무에 평가가 둘 진행되지 않게) */
+        @Test
+        void retryOnlyTheLatestEvaluationOfTheWork() throws Exception {
+            setStatus("EVAL-F1", "처리 실패");
+            insertEvaluation("EVAL-F2", "처리 실패");
+            jdbc.update("UPDATE evaluations SET created_at = created_at + interval '1 minute' WHERE evaluation_id = 'EVAL-F2'");
+
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/retry"), lead)).andExpect(status().isConflict());
+            mvc.perform(auth(post("/api/evaluations/EVAL-F2/retry"), lead)).andExpect(status().isAccepted());
+        }
+
+        /** 메시지를 잃었거나 Worker가 멈춰 '평가 중'에 남은 건은 app.evaluation.stale-after가 지나면 재처리할 수 있다 */
+        @Test
+        void retryUnsticksAnEvaluationLeftInProgress() throws Exception {
+            setStatus("EVAL-F1", "대기");
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/retry"), lead)).andExpect(status().isConflict());
+
+            entityManager.flush();
+            entityManager.clear();
+            jdbc.update("UPDATE evaluations SET updated_at = now() - interval '31 minutes' WHERE evaluation_id = 'EVAL-F1'");
+            mvc.perform(auth(post("/api/evaluations/EVAL-F1/retry"), lead))
+                    .andExpect(status().isAccepted())
+                    .andExpect(jsonPath("$.data.status").value("대기"));
+            assertThat(count("SELECT count(*) FROM outbox_events WHERE type = 'EVALUATE' AND aggregate_id = 'EVAL-F1'"))
+                    .isEqualTo(1);
+        }
     }
 
     @Nested

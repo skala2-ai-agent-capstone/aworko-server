@@ -14,6 +14,7 @@ import com.aworko.server.work.LiveEvaluation;
 import com.aworko.server.work.LiveEvaluationRepository;
 import com.aworko.server.work.LiveEvaluationStatus;
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 
 @ExtendWith(MockitoExtension.class)
 class DeadLetterServiceTest {
@@ -28,18 +30,21 @@ class DeadLetterServiceTest {
     @Mock EvaluationRepository evaluations;
     @Mock EvaluationFailureRepository failures;
     @Mock LiveEvaluationRepository liveEvaluations;
+    @Mock OutboxEventRepository outbox;
     DeadLetterService service;
 
     @BeforeEach
     void setUp() {
-        service = new DeadLetterService(evaluations, failures, liveEvaluations);
+        service = new DeadLetterService(evaluations, failures, liveEvaluations, outbox);
     }
 
     @Test
     void evaluationDeadLetterRecordsFailureAndMarksEvaluationFailed() {
         Evaluation ev = evaluation();
-        when(evaluations.findById("EVAL-1")).thenReturn(Optional.of(ev));
-        var msg = TestJson.mapper().createObjectNode().put("evaluation_id", "EVAL-1").put("attempt", 3);
+        when(evaluations.findByIdForUpdate("EVAL-1")).thenReturn(Optional.of(ev));
+        when(outbox.findEvaluateMessageIds("EVAL-1")).thenReturn(List.of("m-1"));
+        var msg = TestJson.mapper().createObjectNode().put("message_id", "m-1").put("evaluation_id", "EVAL-1")
+                .put("attempt", 3);
 
         service.recordEvaluationFailure(msg, "LLM timeout");
 
@@ -53,7 +58,7 @@ class DeadLetterServiceTest {
 
     @Test
     void missingReasonUsesDefault() {
-        when(evaluations.findById("EVAL-1")).thenReturn(Optional.of(evaluation()));
+        when(evaluations.findByIdForUpdate("EVAL-1")).thenReturn(Optional.of(evaluation()));
 
         service.recordEvaluationFailure(TestJson.mapper().createObjectNode().put("evaluation_id", "EVAL-1"), null);
 
@@ -65,9 +70,50 @@ class DeadLetterServiceTest {
     @Test
     void messageWithoutIdOrUnknownEvaluationIsDroppedWithoutWrites() {
         service.recordEvaluationFailure(TestJson.mapper().createObjectNode().put("message_id", "m"), null);
-        when(evaluations.findById("EVAL-X")).thenReturn(Optional.empty());
+        when(evaluations.findByIdForUpdate("EVAL-X")).thenReturn(Optional.empty());
         service.recordEvaluationFailure(TestJson.mapper().createObjectNode().put("evaluation_id", "EVAL-X"), null);
 
+        verify(failures, never()).save(any());
+    }
+
+    /** 재처리로 새 EVALUATE(m-2)를 보낸 뒤 이전 요청(m-1)의 실패가 늦게 오면, 진행 중인 새 실행을 실패로 바꾸지 않는다 */
+    @Test
+    void deadLetterOfEarlierRequestIsIgnored() {
+        Evaluation ev = evaluation();
+        when(evaluations.findByIdForUpdate("EVAL-1")).thenReturn(Optional.of(ev));
+        when(outbox.findEvaluateMessageIds("EVAL-1")).thenReturn(List.of("m-2", "m-1"));
+
+        service.recordEvaluationFailure(
+                TestJson.mapper().createObjectNode().put("message_id", "m-1").put("evaluation_id", "EVAL-1"), "x");
+
+        assertThat(ev.getStatus()).isEqualTo(EvaluationStatus.WAITING);
+        verify(failures, never()).save(any());
+    }
+
+    /** Worker가 형식 오류로 만든 진단 메시지는 message_id가 새 값이라 아웃박스에 없다. 그래도 실패로 기록한다 */
+    @Test
+    void deadLetterWithUnknownMessageIdStillFails() {
+        Evaluation ev = evaluation();
+        when(evaluations.findByIdForUpdate("EVAL-1")).thenReturn(Optional.of(ev));
+        when(outbox.findEvaluateMessageIds("EVAL-1")).thenReturn(List.of("m-2", "m-1"));
+
+        service.recordEvaluationFailure(TestJson.mapper().createObjectNode().put("message_id", "diag")
+                .put("type", "INVALID_FINAL_EVALUATE").put("evaluation_id", "EVAL-1"), "INVALID_EVENT");
+
+        assertThat(ev.getStatus()).isEqualTo(EvaluationStatus.FAILED);
+        verify(failures).save(any());
+    }
+
+    @Test
+    void deadLetterAfterResultWasSavedLeavesStatusAndRecordsNothing() {
+        Evaluation ev = evaluation();
+        ReflectionTestUtils.setField(ev, "status", EvaluationStatus.AWAITING_CONFIRMATION);
+        when(evaluations.findByIdForUpdate("EVAL-1")).thenReturn(Optional.of(ev));
+
+        service.recordEvaluationFailure(TestJson.mapper().createObjectNode().put("evaluation_id", "EVAL-1"),
+                "TOKEN_NOT_READY");
+
+        assertThat(ev.getStatus()).isEqualTo(EvaluationStatus.AWAITING_CONFIRMATION);
         verify(failures, never()).save(any());
     }
 

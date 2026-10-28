@@ -193,6 +193,27 @@ class MessagingIntegrationTest {
         });
     }
 
+    /** 재처리로 새 EVALUATE를 보낸 뒤 늦게 온 이전 요청의 DLQ는 무시하고, 최신 요청의 실패만 기록한다(아웃박스 조회 포함) */
+    @Test
+    void deadLetterOfAnEarlierRequestIsIgnoredAfterReprocessing() {
+        String id = "EVAL-DLQ-" + UUID.randomUUID().toString().substring(0, 8);
+        tx.executeWithoutResult(s -> evaluations.save(
+                Evaluation.create(id, "W-TEST-QT-01", "C-LGCNS-SALES", "ART-TEST-QT-01", "v2", "v2", id)));
+        var first = tx.execute(s -> publisher.evaluate(id, "C-LGCNS-SALES", "W-TEST-QT-01", "v2", "v2"));
+        var retried = tx.execute(s -> publisher.evaluate(id, "C-LGCNS-SALES", "W-TEST-QT-01", "v2", "v2"));
+
+        for (var sent : new EvaluationMessages.Evaluate[]{first, retried}) {
+            Message dead = MessageBuilder.fromMessage(json("{\"message_id\":\"" + sent.messageId()
+                    + "\",\"evaluation_id\":\"" + id + "\",\"attempt\":3}")).build();
+            rabbitTemplate.send(Topology.EVALUATION_EXCHANGE, Topology.RK_EVALUATION_DLQ, dead);
+        }
+
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(jdbc.queryForObject(
+                "SELECT status FROM evaluations WHERE evaluation_id = ?", String.class, id)).isEqualTo("처리 실패"));
+        assertThat(jdbc.queryForList("SELECT message->>'message_id' FROM evaluation_failures WHERE evaluation_id = ?",
+                String.class, id)).containsExactly(retried.messageId());
+    }
+
     @Test
     void liveDeadLetterMarksRequestFailedWithWorkerErrorCode() {
         LiveEvaluation live = tx.execute(s -> liveEvaluations.save(

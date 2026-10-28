@@ -85,16 +85,33 @@ public class Evaluation {
     }
 
     /**
-     * DLQ로 간 평가를 처리 실패로 표시한다. 이미 확정된 건은 바꾸지 않는다.
+     * DLQ로 간 평가를 처리 실패로 표시한다. Agent가 처리 중인 상태(대기·진행 4단계)에서만 바꾼다.
+     * 확인 대기·검토 대기·자료 보류·확정은 결과가 이미 저장된 뒤라, 늦게 다시 온 메시지의 실패로 덮어쓰지 않는다.
+     * 호출 전에 행을 잠근다(findByIdForUpdate).
      * @return 상태를 바꿨으면 true
      */
     public boolean markFailed() {
-        if (status == EvaluationStatus.CONFIRMED || status == EvaluationStatus.FAILED) {
+        if (!EvaluationStatus.IN_PROGRESS.contains(status)) {
             return false;
         }
         status = EvaluationStatus.FAILED;
         updatedAt = OffsetDateTime.now();
         return true;
+    }
+
+    /**
+     * 팀장 재처리로 대기로 되돌린다. 처리 실패·자료 보류이거나, staleBefore보다 전부터 처리 중에 멈춘 건만 받는다
+     * (메시지를 잃었거나 Worker가 멈춘 경우의 탈출구). 호출 전에 행을 잠근다.
+     */
+    public void resetForRetry(OffsetDateTime staleBefore) {
+        boolean stuck = EvaluationStatus.IN_PROGRESS.contains(status) && updatedAt.isBefore(staleBefore);
+        if (status != EvaluationStatus.FAILED && status != EvaluationStatus.ON_HOLD && !stuck) {
+            throw new BusinessException(ErrorCode.CONFLICT, EvaluationStatus.IN_PROGRESS.contains(status)
+                    ? "평가가 진행 중입니다. 오래 멈춰 있을 때만 재처리할 수 있습니다"
+                    : "현재 상태(" + status.getCode() + ")에서는 처리할 수 없습니다");
+        }
+        status = EvaluationStatus.WAITING;
+        updatedAt = OffsetDateTime.now();
     }
 
     /** 평가 건 ID 규칙. business-mcp common/runtime.py eval_id_for와 같다. */

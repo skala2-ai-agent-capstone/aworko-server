@@ -3,9 +3,6 @@ package com.aworko.server.evaluation;
 import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_CONFIRMATION;
 import static com.aworko.server.evaluation.EvaluationStatus.AWAITING_REVIEW;
 import static com.aworko.server.evaluation.EvaluationStatus.CONFIRMED;
-import static com.aworko.server.evaluation.EvaluationStatus.FAILED;
-import static com.aworko.server.evaluation.EvaluationStatus.ON_HOLD;
-import static com.aworko.server.evaluation.EvaluationStatus.WAITING;
 
 import com.aworko.server.evaluation.dto.AppealRequest;
 import com.aworko.server.evaluation.dto.EvaluationDetail;
@@ -24,12 +21,16 @@ import com.aworko.server.work.WorkCase;
 import com.aworko.server.work.WorkCaseRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import java.time.Clock;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -40,6 +41,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 @RequiredArgsConstructor
+@EnableConfigurationProperties(EvaluationProperties.class)
 public class EvaluationService {
 
     private final EvaluationRepository evaluationRepository;
@@ -54,6 +56,9 @@ public class EvaluationService {
     private final ReviewRecords reviewRecords;
     private final EvaluationAccess access;
     private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbc;
+    private final EvaluationProperties props;
+    private final Clock clock;
 
     @Transactional(readOnly = true)
     public List<EvaluationSummary> listMine(AuthPrincipal me) {
@@ -122,13 +127,29 @@ public class EvaluationService {
         return StatusResponse.of(evaluation);
     }
 
-    /** 처리 실패·자료 보류 건 재처리: 담당 팀장만. 대기로 되돌리고 EVALUATE를 다시 보낸다. */
+    /**
+     * 재처리: 담당 팀장만. 처리 실패·자료 보류 건, 또는 대기에 들어간 뒤 staleAfter가 지나도록 '평가 중'인 건을
+     * 대기로 되돌리고 EVALUATE를 새 message_id로 다시 보낸다. Agent는 message_id가 다르면 새 실행으로 보고 다시 평가해
+     * 새 판을 저장한다. Agent가 진행 단계를 기록하지 않아 처리 중인 건도 staleAfter가 지나면 받으며, 그때는 먼저 끝난
+     * 실행의 결과가 남는다. 업무의 최신 평가만 받는다(그 뒤 새 버전으로 다시 완료했으면 이전 평가는 돌리지 않는다).
+     */
     @Transactional
     public StatusResponse retry(AuthPrincipal me, String evaluationId) {
+        // 재완료(WorkEventService.complete, FOR UPDATE)와 같은 순서로 업무 행부터 잠가 한 업무에 평가가 둘 진행되지
+        // 않게 한다. NO KEY UPDATE라 본인 확인·검토 결정의 human_actions FK 검사(KEY SHARE)와는 엇갈려 교착되지 않는다
+        String workId = jdbc.query("SELECT work_id FROM evaluations WHERE evaluation_id = ? AND company_id = ?",
+                        (rs, i) -> rs.getString(1), evaluationId, me.companyId()).stream().findFirst()
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "평가를 찾을 수 없습니다"));
+        jdbc.queryForList("SELECT 1 FROM work_cases WHERE work_id = ? FOR NO KEY UPDATE", workId);
         Evaluation evaluation = lock(me, evaluationId);
         WorkCase work = access.workOf(evaluation);
         access.requireTeamLead(me, work);
-        evaluation.transition(Set.of(FAILED, ON_HOLD), WAITING);
+        String latest = jdbc.queryForObject("SELECT evaluation_id FROM evaluations WHERE work_id = ? "
+                + "ORDER BY created_at DESC, evaluation_id DESC LIMIT 1", String.class, workId);
+        if (!evaluationId.equals(latest)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "이 업무에 더 최근 평가가 있어 이전 평가는 재처리할 수 없습니다");
+        }
+        evaluation.resetForRetry(OffsetDateTime.now(clock).minus(props.staleAfter()));
         failureRepository.findByEvaluationIdAndReprocessedAtIsNull(evaluationId)
                 .forEach(f -> f.markReprocessed(me.userId()));
         record(work, me, HumanActionType.RETRY_FAILED_EVALUATION, evaluation, payload(evaluation));

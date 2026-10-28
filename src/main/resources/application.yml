@@ -93,6 +93,9 @@ app:
   live-evaluation:
     # 실시간 피드백 요청 간격(사용자별)
     min-interval: 5m
+  evaluation:
+    # 최종 평가가 이만큼 '평가 중'에서 바뀌지 않으면 메시지를 잃었거나 Worker가 멈춘 것으로 보고 팀장 재처리를 받는다
+    stale-after: 30m
   final-worker:
     # 최종 평가 Worker(--token-file)가 읽는 평가별 실행 토큰 파일. 비우면 공급하지 않는다.
     # 운영은 Worker와 같은 볼륨의 경로(예: /app/run-tokens/final-tokens.json)를 FINAL_TOKEN_FILE로 준다

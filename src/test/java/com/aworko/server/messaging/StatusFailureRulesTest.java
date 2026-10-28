@@ -26,6 +26,21 @@ class StatusFailureRulesTest {
         assertThat(confirmed.getStatus()).isEqualTo(EvaluationStatus.CONFIRMED);
     }
 
+    /** 결과가 저장된 뒤 늦게 다시 온 메시지가 DLQ로 가도, 직원 확인·팀장 검토 중인 건을 처리 실패로 바꾸지 않는다 */
+    @Test
+    void evaluationMarkFailedOnlyWhileInProgress() {
+        for (EvaluationStatus done : new EvaluationStatus[]{EvaluationStatus.AWAITING_CONFIRMATION,
+                EvaluationStatus.AWAITING_REVIEW, EvaluationStatus.ON_HOLD}) {
+            Evaluation ev = Evaluation.create("EVAL-3", "W-1", "C-1", "ART-1", "v2", "v2", "k3");
+            ReflectionTestUtils.setField(ev, "status", done);
+            assertThat(ev.markFailed()).isFalse();
+            assertThat(ev.getStatus()).isEqualTo(done);
+        }
+        Evaluation collecting = Evaluation.create("EVAL-4", "W-1", "C-1", "ART-1", "v2", "v2", "k4");
+        ReflectionTestUtils.setField(collecting, "status", EvaluationStatus.COLLECTING);
+        assertThat(collecting.markFailed()).isTrue();
+    }
+
     @Test
     void liveEvaluationMarkFailedDoesNotOverrideCompleted() {
         LiveEvaluation live = LiveEvaluation.request("W-1", "E-1", 1, 5, null, null, OffsetDateTime.now());

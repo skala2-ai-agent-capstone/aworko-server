@@ -6,9 +6,12 @@ import java.io.IOException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.AmqpRejectAndDontRequeueException;
+import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.dao.DataAccessException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.TransactionException;
 
 /**
  * DLQ 소비. 메시지를 DB(evaluation_failures 또는 live_evaluations.error)에 남긴 뒤 ack한다.
@@ -28,12 +31,27 @@ public class DeadLetterListener {
 
     @RabbitListener(queues = Topology.EVALUATION_DLQ)
     public void onEvaluationDeadLetter(Message message) {
-        deadLetterService.recordEvaluationFailure(parse(message), reason(message));
+        JsonNode body = parse(message);
+        requeueOnDbError(message, () -> deadLetterService.recordEvaluationFailure(body, reason(message)));
     }
 
     @RabbitListener(queues = Topology.LIVE_DLQ)
     public void onLiveEvaluationDeadLetter(Message message) {
-        deadLetterService.recordLiveEvaluationFailure(parse(message), reason(message));
+        JsonNode body = parse(message);
+        requeueOnDbError(message, () -> deadLetterService.recordLiveEvaluationFailure(body, reason(message)));
+    }
+
+    /** DLQ에는 다음 단계가 없어 그대로 버리면 실패가 기록되지 않는다. DB 오류는 잠시 쉬었다 다시 넣는다 */
+    private static void requeueOnDbError(Message message, Runnable record) {
+        try {
+            record.run();
+        } catch (DataAccessException | TransactionException e) {
+            // 연결을 아예 못 얻으면 트랜잭션 시작에서 CannotCreateTransactionException(TransactionException)이 난다
+            log.warn("DLQ message requeued after DB error: message_id={}, error={}",
+                    message.getMessageProperties().getMessageId(), e.getClass().getSimpleName());
+            EvaluationResultListener.pause();
+            throw new ImmediateRequeueAmqpException("DB unavailable", e);
+        }
     }
 
     private JsonNode parse(Message message) {
