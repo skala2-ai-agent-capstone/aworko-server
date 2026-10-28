@@ -62,7 +62,9 @@ public class EvaluationController {
         return ApiResponse.success(evaluationService.appeal(me, evaluationId, request));
     }
 
-    @Operation(summary = "실패·보류 평가 재처리", description = "'처리 실패' 또는 '자료 보류' 건을 다시 평가한다. 담당 팀장만(202).")
+    @Operation(summary = "실패·보류 평가 재처리", description = "'처리 실패'·'자료 보류' 건, 또는 대기에 들어간 뒤 "
+            + "app.evaluation.stale-after(기본 30분)가 지나도록 '평가 중'인 건을 AI가 새로 평가하게 한다(새 초안·코칭 판이 생긴다. "
+            + "평가 중이던 건은 먼저 끝난 실행의 결과가 남는다). 업무의 최신 평가만. 담당 팀장만(202).")
     @PostMapping("/{evaluationId}/retry")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public ApiResponse<StatusResponse> retry(@AuthenticationPrincipal AuthPrincipal me,

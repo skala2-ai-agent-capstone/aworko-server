@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.aworko.server.global.error.BusinessException;
 import com.aworko.server.global.error.ErrorCode;
+import java.time.OffsetDateTime;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -35,6 +36,36 @@ class EvaluationStatusRulesTest {
                 EvaluationStatus.CONFIRMED))
                 .isInstanceOf(BusinessException.class)
                 .extracting(ex -> ((BusinessException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT);
+    }
+
+    @Test
+    void retryResetsFailedOnHoldAndStuckEvaluationsOnly() {
+        OffsetDateTime staleBefore = OffsetDateTime.now().minusMinutes(30);
+        for (EvaluationStatus ok : new EvaluationStatus[]{EvaluationStatus.FAILED, EvaluationStatus.ON_HOLD}) {
+            Evaluation e = Evaluation.create("E", "W", "C", "A", "v2", "v2", "k");
+            ReflectionTestUtils.setField(e, "status", ok);
+            e.resetForRetry(staleBefore);
+            assertThat(e.getStatus()).isEqualTo(EvaluationStatus.WAITING);
+        }
+
+        Evaluation stuck = Evaluation.create("E", "W", "C", "A", "v2", "v2", "k");
+        ReflectionTestUtils.setField(stuck, "updatedAt", staleBefore.minusMinutes(1));
+        stuck.resetForRetry(staleBefore);
+        assertThat(stuck.getStatus()).isEqualTo(EvaluationStatus.WAITING);
+        assertThat(stuck.getUpdatedAt()).isAfter(staleBefore);
+
+        Evaluation running = Evaluation.create("E", "W", "C", "A", "v2", "v2", "k");
+        assertThatThrownBy(() -> running.resetForRetry(staleBefore))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("진행 중");
+        for (EvaluationStatus no : new EvaluationStatus[]{EvaluationStatus.AWAITING_CONFIRMATION,
+                EvaluationStatus.AWAITING_REVIEW, EvaluationStatus.CONFIRMED}) {
+            Evaluation e = Evaluation.create("E", "W", "C", "A", "v2", "v2", "k");
+            ReflectionTestUtils.setField(e, "status", no);
+            assertThatThrownBy(() -> e.resetForRetry(staleBefore))
+                    .isInstanceOf(BusinessException.class)
+                    .extracting(ex -> ((BusinessException) ex).getErrorCode()).isEqualTo(ErrorCode.CONFLICT);
+            assertThat(e.getStatus()).isEqualTo(no);
+        }
     }
 
     @Test
