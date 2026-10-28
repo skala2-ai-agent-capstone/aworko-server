@@ -32,9 +32,9 @@ public class AuthController {
         return ApiResponse.success(authService.login(request));
     }
 
-    @Operation(summary = "회원 가입", description = "사번·비밀번호·이름·역할(member | team_lead)·회사 이름(팀 이름은 선택)으로 계정을 만들고, "
-            + "로그인과 같은 응답(Access JWT + 내 정보)을 돌려준다. 회사·팀은 같은 이름이 있으면 들어가고 없으면 새로 만든다. "
-            + "이미 있는 사번은 409.")
+    @Operation(summary = "회원 가입", description = "사번·비밀번호·이름과 소속 회사·팀 ID(가입용 목록에서 고른 값, 팀 필수)로 "
+            + "팀원 계정을 만들고, 로그인과 같은 응답(Access JWT + 내 정보)을 돌려준다. 팀장 가입과 회사·팀 생성은 하지 않는다"
+            + "(role을 보내도 무시). 목록에 없거나 그 회사의 팀이 아니면 400, 이미 있는 사번은 409.")
     @SecurityRequirements
     @PostMapping("/auth/signup")
     @ResponseStatus(HttpStatus.CREATED)
@@ -42,8 +42,7 @@ public class AuthController {
         return ApiResponse.success(authService.signup(request));
     }
 
-    @Operation(summary = "가입용 회사·팀 목록", description = "가입 화면에서 고를 회사와 팀. 이름을 그대로 company_name·team_name에 넣는다. "
-            + "목록에 없는 이름을 넣으면 새 회사·팀이 만들어진다.")
+    @Operation(summary = "가입용 회사·팀 목록", description = "가입 화면에서 고를 회사와 팀. 고른 company_id·team_id를 가입 요청에 넣는다.")
     @SecurityRequirements
     @GetMapping("/auth/companies")
     public ApiResponse<List<CompanyOption>> companies() {

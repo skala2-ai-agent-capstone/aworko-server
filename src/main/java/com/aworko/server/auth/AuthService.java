@@ -1,6 +1,5 @@
 package com.aworko.server.auth;
 
-import com.aworko.server.global.common.CodedEnum;
 import com.aworko.server.global.error.BusinessException;
 import com.aworko.server.global.error.ErrorCode;
 import com.aworko.server.global.security.AuthPrincipal;
@@ -17,9 +16,7 @@ import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,9 +30,9 @@ public class AuthService {
 
     private static final String BAD_CREDENTIALS = "사번 또는 비밀번호가 올바르지 않습니다";
     private static final String DUPLICATE_EMPLOYEE_NO = "이미 가입된 사번입니다";
-    /** 시드(organization.json)의 ID 규칙: 팀원 E-사번, 팀장 L-사번 */
+    private static final String UNKNOWN_TEAM = "소속 회사·팀을 목록에서 다시 골라 주세요";
+    /** 시드(organization.json)의 ID 규칙: 팀원 E-사번(팀장 L-사번은 가입으로 만들지 않는다) */
     private static final String MEMBER_ID_PREFIX = "E-";
-    private static final String LEAD_ID_PREFIX = "L-";
 
     private final UserRepository userRepository;
     private final CompanyRepository companyRepository;
@@ -54,26 +51,31 @@ public class AuthService {
     }
 
     /**
-     * 계정을 만들고 로그인 응답을 그대로 돌려준다. 역할은 가입자가 고른다(없으면 member).
-     * 회사·팀은 이름으로 찾고, 없으면 만든다. user_id는 시드와 같은 규칙(팀원 E-사번, 팀장 L-사번)이다.
-     * organization 테이블은 MCP 쪽 스키마라 다른 MCP 테이블처럼 JdbcTemplate으로 넣는다. 비밀번호는 로그인과 같이 평문 저장.
+     * 계정을 만들고 로그인 응답을 그대로 돌려준다. 기존 회사·팀(가입 화면 목록의 ID)에 팀원으로만 가입한다.
+     * 팀장은 가입으로 만들지 않는다: 서버 주소만 알면 누구나 기존 팀의 팀장이 되어 검토 배정·운영 설정을 가져갈 수 있었다.
+     * 팀은 필수다: 팀이 없으면 이의 제기의 검토자가 정해지지 않는다. 회사도 새로 만들지 않는다(새 회사는 내규·기준이 없다).
+     * user_id는 시드와 같은 규칙(팀원 E-사번)이다. organization 테이블은 MCP 쪽 스키마라 JdbcTemplate으로 넣는다.
+     * 비밀번호는 로그인과 같이 평문 저장.
      */
     @Transactional
     public LoginResponse signup(SignupRequest request) {
         if (userRepository.existsByEmployeeNo(request.employeeNo())) {
             throw new BusinessException(ErrorCode.CONFLICT, DUPLICATE_EMPLOYEE_NO);
         }
-        UserRole role = request.role() == null ? UserRole.MEMBER : CodedEnum.fromCode(UserRole.class, request.role());
-        String companyId = companyIdFor(request.companyName().strip());
-        String teamId = request.teamName() == null || request.teamName().isBlank()
-                ? null : teamIdFor(companyId, request.teamName().strip());
+        String companyId = request.companyId().strip();
+        String teamId = request.teamId().strip();
+        Integer teams = jdbc.queryForObject("SELECT count(*) FROM teams WHERE team_id = ? AND company_id = ?",
+                Integer.class, teamId, companyId);
+        if (teams == null || teams == 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, UNKNOWN_TEAM);
+        }
 
-        String userId = (role == UserRole.TEAM_LEAD ? LEAD_ID_PREFIX : MEMBER_ID_PREFIX) + request.employeeNo();
+        String userId = MEMBER_ID_PREFIX + request.employeeNo();
         try {
             jdbc.update("INSERT INTO users (user_id, employee_no, password, company_id, team_id, name, role) "
                             + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     userId, request.employeeNo(), request.password(), companyId, teamId, request.name().strip(),
-                    role.getCode());
+                    UserRole.MEMBER.getCode());
         } catch (DuplicateKeyException e) {
             // 동시에 같은 사번으로 가입했거나 같은 user_id가 이미 있는 경우
             throw new BusinessException(ErrorCode.CONFLICT, DUPLICATE_EMPLOYEE_NO);
@@ -90,36 +92,6 @@ public class AuthService {
         });
         return jdbc.query("SELECT company_id, name FROM companies ORDER BY name, company_id", (rs, i) -> new CompanyOption(
                 rs.getString("company_id"), rs.getString("name"), teams.getOrDefault(rs.getString("company_id"), List.of())));
-    }
-
-    /** 같은 이름(대소문자 무시) 회사가 있으면 그 ID, 없으면 새로 만든다. 같은 이름 동시 가입은 advisory lock으로 하나만 만든다. */
-    private String companyIdFor(String name) {
-        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtext(?))", "company:" + name.toLowerCase(Locale.ROOT));
-        List<String> found = jdbc.queryForList(
-                "SELECT company_id FROM companies WHERE lower(name) = lower(?) ORDER BY company_id LIMIT 1", String.class, name);
-        if (!found.isEmpty()) {
-            return found.get(0);
-        }
-        String companyId = "C-" + newId();
-        jdbc.update("INSERT INTO companies (company_id, name) VALUES (?, ?)", companyId, name);
-        return companyId;
-    }
-
-    private String teamIdFor(String companyId, String name) {
-        jdbc.queryForList("SELECT pg_advisory_xact_lock(hashtext(?))", "team:" + companyId + ":" + name.toLowerCase(Locale.ROOT));
-        List<String> found = jdbc.queryForList(
-                "SELECT team_id FROM teams WHERE company_id = ? AND lower(name) = lower(?) ORDER BY team_id LIMIT 1",
-                String.class, companyId, name);
-        if (!found.isEmpty()) {
-            return found.get(0);
-        }
-        String teamId = "T-" + newId();
-        jdbc.update("INSERT INTO teams (team_id, company_id, name) VALUES (?, ?, ?)", teamId, companyId, name);
-        return teamId;
-    }
-
-    private static String newId() {
-        return UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
     }
 
     public MeResponse me(AuthPrincipal principal) {

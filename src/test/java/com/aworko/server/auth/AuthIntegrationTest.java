@@ -139,11 +139,10 @@ class AuthIntegrationTest {
     }
 
     @Test
-    void signupJoinsExistingCompanyAndTeamByNameAndLogsIn() throws Exception {
+    void signupJoinsExistingCompanyAndTeamByIdAndLogsIn() throws Exception {
         Map<String, Object> body = signupBody(7001, "password1");
         body.put("name", "  새 직원  ");
-        body.put("company_name", " 테스트 회사 ");
-        body.put("team_name", "영업1팀");
+        body.put("company_id", " C-LGCNS-SALES ");
 
         String response = mockMvc.perform(signupRequest(body))
                 .andExpect(status().isCreated())
@@ -165,65 +164,45 @@ class AuthIntegrationTest {
         assertThat(login(7001, "password1")).isNotBlank();
     }
 
+    /** 가입으로는 팀장이 되지 않는다. 누구나 기존 팀의 팀장이 되어 검토 배정·운영 설정을 가져갈 수 있었다 */
     @Test
-    void signupAsTeamLeadGetsLeadRole() throws Exception {
+    void signupIgnoresRequestedRoleAndCreatesMemberOnly() throws Exception {
         Map<String, Object> body = signupBody(7002, "password1");
         body.put("role", "team_lead");
         String response = mockMvc.perform(signupRequest(body))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.user.user_id").value("L-7002"))
-                .andExpect(jsonPath("$.data.user.role").value("team_lead"))
+                .andExpect(jsonPath("$.data.user.user_id").value("E-7002"))
+                .andExpect(jsonPath("$.data.user.role").value("member"))
                 .andReturn().getResponse().getContentAsString();
 
-        // 팀장 전용 API(팀 업무 목록)를 쓸 수 있다
+        // 팀장 전용 API(팀 업무 목록)는 쓸 수 없다
         String token = objectMapper.readTree(response).path("data").path("access_token").asText();
         mockMvc.perform(get("/api/works").param("scope", "team").header("Authorization", "Bearer " + token))
-                .andExpect(status().isOk());
+                .andExpect(status().isForbidden());
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users WHERE user_id = 'L-7002'", Integer.class)).isZero();
     }
 
+    /** 목록에 없는 회사·팀이나 다른 회사의 팀으로는 가입하지 않고, 회사·팀도 새로 만들지 않는다 */
     @Test
-    void signupWithNewCompanyAndTeamCreatesThemOnceAndOthersJoin() throws Exception {
-        Map<String, Object> first = signupBody(7003, "password1");
-        first.put("role", "team_lead");
-        first.put("company_name", "가입테스트 새 회사");
-        first.put("team_name", "가입테스트 새 팀");
-        String created = mockMvc.perform(signupRequest(first))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.user.company_name").value("가입테스트 새 회사"))
-                .andExpect(jsonPath("$.data.user.team_name").value("가입테스트 새 팀"))
-                .andReturn().getResponse().getContentAsString();
-        JsonNode user = objectMapper.readTree(created).path("data").path("user");
-        assertThat(user.path("company_id").asText()).startsWith("C-").isNotEqualTo("C-LGCNS-SALES");
-        assertThat(user.path("team_id").asText()).startsWith("T-");
+    void signupRejectsUnknownOrMismatchedCompanyAndTeam() throws Exception {
+        jdbc.update("INSERT INTO companies (company_id, name) VALUES ('C-SIGNUP-OTHER', '가입테스트 다른 회사')");
+        jdbc.update("INSERT INTO teams (team_id, company_id, name) VALUES ('T-SIGNUP-OTHER', 'C-SIGNUP-OTHER', '가입테스트 팀')");
+        int companies = jdbc.queryForObject("SELECT count(*) FROM companies", Integer.class);
+        int teams = jdbc.queryForObject("SELECT count(*) FROM teams", Integer.class);
 
-        // 대소문자·앞뒤 공백이 달라도 같은 회사·팀에 들어간다
-        Map<String, Object> second = signupBody(7004, "password1");
-        second.put("company_name", "  가입테스트 새 회사 ");
-        second.put("team_name", "가입테스트 새 팀");
-        mockMvc.perform(signupRequest(second))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.user.company_id").value(user.path("company_id").asText()))
-                .andExpect(jsonPath("$.data.user.team_id").value(user.path("team_id").asText()));
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM companies WHERE name = '가입테스트 새 회사'", Integer.class))
-                .isOne();
-
-        // 가입 화면 목록에도 새 회사·팀이 나온다
-        mockMvc.perform(get("/api/auth/companies"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data[?(@.name == '가입테스트 새 회사')].teams[0].name").value("가입테스트 새 팀"));
-    }
-
-    @Test
-    void signupWithoutTeamLeavesTeamEmpty() throws Exception {
-        for (Object teamName : new Object[]{null, " "}) {
-            int employeeNo = teamName == null ? 7005 : 7006;
-            Map<String, Object> body = signupBody(employeeNo, "password1");
-            body.put("team_name", teamName);
+        String[][] cases = {{"C-NOPE", "T-SALES-01"}, {"C-LGCNS-SALES", "T-NOPE"}, {"C-LGCNS-SALES", "T-SIGNUP-OTHER"}};
+        for (String[] c : cases) {
+            Map<String, Object> body = signupBody(7003, "password1");
+            body.put("company_id", c[0]);
+            body.put("team_id", c[1]);
             mockMvc.perform(signupRequest(body))
-                    .andExpect(status().isCreated())
-                    .andExpect(jsonPath("$.data.user.team_id").doesNotExist())
-                    .andExpect(jsonPath("$.data.user.company_name").value("테스트 회사"));
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
+                    .andExpect(jsonPath("$.error.message").value("소속 회사·팀을 목록에서 다시 골라 주세요"));
         }
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM users WHERE employee_no = 7003", Integer.class)).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM companies", Integer.class)).isEqualTo(companies);
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM teams", Integer.class)).isEqualTo(teams);
     }
 
     @Test
@@ -231,17 +210,13 @@ class AuthIntegrationTest {
         mockMvc.perform(signupRequest(signupBody(7007, "password1"))).andExpect(status().isCreated());
 
         for (int employeeNo : new int[]{1021, 7007}) {
-            Map<String, Object> body = signupBody(employeeNo, "password2");
-            body.put("company_name", "가입테스트 중복 회사");
-            mockMvc.perform(signupRequest(body))
+            mockMvc.perform(signupRequest(signupBody(employeeNo, "password2")))
                     .andExpect(status().isConflict())
                     .andExpect(jsonPath("$.error.code").value("CONFLICT"))
                     .andExpect(jsonPath("$.error.message").value("이미 가입된 사번입니다"));
         }
-        // 기존 계정은 그대로이고, 실패한 가입은 회사를 만들지 않는다
+        // 기존 계정은 그대로다
         assertThat(login(1021, "1234")).isNotBlank();
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM companies WHERE name = '가입테스트 중복 회사'", Integer.class))
-                .isZero();
     }
 
     @Test
@@ -250,12 +225,15 @@ class AuthIntegrationTest {
         Map<String, Object> noName = signupBody(7008, "password1");
         noName.remove("name");
         Map<String, Object> noCompany = signupBody(7008, "password1");
-        noCompany.remove("company_name");
-        Map<String, Object> unknownRole = signupBody(7008, "password1");
-        unknownRole.put("role", "admin");
+        noCompany.remove("company_id");
+        // 팀은 필수다. 팀이 없으면 이의 제기의 검토자가 정해지지 않는다
+        Map<String, Object> noTeam = signupBody(7008, "password1");
+        noTeam.remove("team_id");
+        Map<String, Object> blankTeam = signupBody(7008, "password1");
+        blankTeam.put("team_id", " ");
         Map<String, Object> zeroEmployeeNo = signupBody(0, "password1");
 
-        for (Map<String, Object> body : List.of(shortPassword, noName, noCompany, unknownRole, zeroEmployeeNo)) {
+        for (Map<String, Object> body : List.of(shortPassword, noName, noCompany, noTeam, blankTeam, zeroEmployeeNo)) {
             mockMvc.perform(signupRequest(body))
                     .andExpect(status().isBadRequest())
                     .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
@@ -291,8 +269,8 @@ class AuthIntegrationTest {
         body.put("employee_no", employeeNo);
         body.put("password", password);
         body.put("name", "가입 직원");
-        body.put("company_name", "테스트 회사");
-        body.put("team_name", "영업1팀");
+        body.put("company_id", "C-LGCNS-SALES");
+        body.put("team_id", "T-SALES-01");
         return body;
     }
 

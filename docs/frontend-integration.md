@@ -8,12 +8,10 @@
 - 개발 서버: `vite.config.js`의 프록시 `target`을 위 주소로 바꾼다. 프록시를 쓰면 CORS 설정이 필요 없다.
 - 응답은 `{ok, data}` / `{ok:false, error:{code, message}}`이고 칸은 snake_case다. 기존 `api/client.js`가 camelCase로 바꿔 준다.
 - 로그인: `POST /api/auth/login {employee_no, password}` → `access_token`. 이후 요청에 `Authorization: Bearer …`를 붙인다(이미 연결됨).
-- 회원 가입: `POST /api/auth/signup {employee_no, password(8~64자), name, role, company_name, team_name(선택)}` → 201, 응답은 로그인과 같다(바로 로그인 상태).
-  - `role`: `member`(팀원, 기본값) | `team_lead`(팀장: 평가 검토·팀 대시보드·운영 설정). 가입 화면에서 고르게 한다.
-  - `company_name`·`team_name`: 같은 이름(대소문자·앞뒤 공백 무시)이 있으면 그 회사·팀에 들어가고, 없으면 새로 만든다. 팀은 회사 안에서 찾는다.
-  - 고를 목록은 `GET /api/auth/companies`(로그인 불필요) → `[{company_id, name, teams:[{team_id, name}]}]`. 목록의 `name`을 그대로 보내면 기존 회사·팀에 들어간다.
-  - 이미 있는 사번은 409 `CONFLICT`, 잘못된 역할·짧은 비밀번호 등은 400 `VALIDATION_ERROR`.
-  - 새로 만든 회사에는 평가 기준(루브릭)·고객·사내 자료가 없다. 평가·피드백 시연은 기존 회사(`LG CNS 영업담당 (가상 테넌트)`)로 하는 편이 낫다.
+- 회원 가입: `POST /api/auth/signup {employee_no, password(8~64자), name, company_id, team_id}` → 201, 응답은 로그인과 같다(바로 로그인 상태).
+  - 고를 목록은 `GET /api/auth/companies`(로그인 불필요) → `[{company_id, name, teams:[{team_id, name}]}]`. 고른 `company_id`·`team_id`를 보낸다. 팀은 필수다(팀이 없으면 이의 제기의 검토자가 정해지지 않는다).
+  - 가입은 항상 팀원(`member`)이다. 팀장 가입·회사·팀 생성은 하지 않는다(`role`을 보내도 무시). 팀장은 시드나 DB에서 지정한다.
+  - 이미 있는 사번은 409 `CONFLICT`, 짧은 비밀번호·빈 칸은 400 `VALIDATION_ERROR`, 목록에 없는 회사·팀이나 그 회사의 팀이 아니면 400 `VALIDATION_ERROR`(`소속 회사·팀을 목록에서 다시 골라 주세요`).
 
 ## 화면별
 
